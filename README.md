@@ -81,6 +81,7 @@ When running the file, it will generate a plot of some random datasets.
 
 ## Updates
 
+- 2026/08/17: Replace class-embedding with one-hot + linear, which has a bias compared to the nn.Embedding used before, and matches the full model implementation.
 - 2026/06/10: Add nanoprior. 
 Bugfix based on [#2](https://github.com/soda-inria/nanotabicl/issues/2): Subtract mean when standardizing input data.
 - 2026/03/25: Add faster + cached RoPE implementation based on the TabICLv2 version (warning: this permutes the neurons, so it's not compatible with older nanotabicl checkpoints).

@@ -60,12 +60,9 @@ class NanoTabICLv2(nn.Module):
         return self.out_mlp(self.out_ln(emb))  # output MLP
 
 
-class ClassEmbedding(nn.Embedding):
-    def reset_parameters(self) -> None:  # change init to match one-hot + linear
-        nn.init.uniform_(self.weight, -1/math.sqrt(self.num_embeddings), 1/math.sqrt(self.num_embeddings))
-
-    def forward(self, y: torch.Tensor) -> torch.Tensor:
-        return super().forward(y.squeeze(-1).long())
+class ClassEmbedding(nn.Linear):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return super().forward(torch.nn.functional.one_hot(input.squeeze(-1), self.in_features).float())
 
 
 def get_mlp(n_in: int, n_hidden: int, n_out: int):
