@@ -29,6 +29,8 @@ class NanoTabICLEstimator(BaseEstimator):
         self.random_state = random_state
 
     def fit(self, X, y):
+        if len(X) != len(y):
+            raise ValueError("X and y must contain the same number of samples")
         self.model_ = (load_model(self.model, self.device)[0] if isinstance(self.model, str)
                        else self.model.to(resolve_device(self.device)).eval())
         self.X_train_ = np.asarray(X, dtype=np.float32)
