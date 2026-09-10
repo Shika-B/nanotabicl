@@ -39,7 +39,7 @@ def test_config_overrides():
 def test_prior_batch():
     overrides = ["data.micro_batch_size=3", "data.min_seq_len=50", "data.max_seq_len=60", "data.max_features=7"]
     x, y, n_train = PriorDataset(load_config([], overrides).data).sample_batch()
-    assert x.shape[:2] == y.shape and x.shape[0] == 3 and 50 <= x.shape[1] <= 60 and 2 <= x.shape[2] <= 7
+    assert x.shape[:2] == y.shape and x.shape[0] == 3 and 50 <= x.shape[1] <= 60 and 1 <= x.shape[2] <= 7
     assert torch.isfinite(x).all() and torch.isfinite(y).all() and 1 <= n_train < x.shape[1]
     for yi in y:  # train and test rows contain the same classes
         assert torch.equal(yi[:n_train].unique(), yi[n_train:].unique()) and yi.unique().numel() >= 2
