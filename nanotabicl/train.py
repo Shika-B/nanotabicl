@@ -106,7 +106,9 @@ def train(cfg: Config) -> NanoTabICLv2:
                 f.write(json.dumps(metrics) + "\n")
             if cfg.wandb_project:
                 wandb.log(metrics, step=step)
-        if step % cfg.save_every == 0 or step == cfg.optim.max_steps:
+        if step > 0 and step % cfg.save_every == 0 or step == cfg.optim.max_steps:
+            if step > cfg.save_every:
+                os.rename(ckpt_path, os.path.join(cfg.out_dir, "previous.pt"))
             torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step,
                         "config": asdict(cfg)}, ckpt_path)
     return model
