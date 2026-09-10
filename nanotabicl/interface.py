@@ -12,7 +12,6 @@ from .data import clip_outliers, preprocess
 from .runtime import build_model, resolve_device
 
 
-@functools.lru_cache  # fitting many estimators from the same checkpoint loads it once
 def load_model(path: str, device: str = "auto") -> tuple[torch.nn.Module, Config]:
     device = resolve_device(device)
     ckpt = torch.load(path, map_location=device, weights_only=False)
