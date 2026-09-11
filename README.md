@@ -123,6 +123,18 @@ python -m nanotabicl.eval runs/fg_control/latest.pt runs/fg_penalized/latest.pt 
   --context-sizes 32 64 128 --seeds 0 1 2 --output runs/fg_comparison.json
 ```
 
+Summarize an existing results file without rerunning evaluation:
+
+```bash
+python -m nanotabicl.summarize_eval runs/fg_comparison.json
+```
+
+The first checkpoint is the control and the second is penalized; override with
+`--control CHECKPOINT_KEY --penalized CHECKPOINT_KEY` if needed. The table reports
+penalized minus control, averaged over paired split seeds, with their sample standard
+deviation. Negative differences mean improvement. Split-seed variability does not
+measure variability across independently trained models.
+
 The original Iris, Wine, Breast Cancer and Digits tasks report accuracy, log loss,
 and multiclass Brier score. The additional benchmarks are:
 
