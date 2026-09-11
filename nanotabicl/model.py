@@ -5,6 +5,14 @@ import typing
 import torch
 import torch.nn as nn
 
+def scaled_dot_product_attention(q, k, v):
+    if hasattr(nn.functional, "scaled_dot_product_attention"):
+        return nn.functional.scaled_dot_product_attention(q, k, v)
+
+    scale = q.size(-1) ** -0.5
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    weights = torch.softmax(scores, dim=-1)
+    return torch.matmul(weights, v)
 
 class NanoTabICLv2(nn.Module):
     def __init__(self, max_classes: int, out_dim: int, embed_dim: int = 128,
@@ -132,7 +140,7 @@ class TransformerBlock(nn.MultiheadAttention, TableAttnBase):
         q, k = (t if self.rope is None else self.rope(t) for t in [q, k])  # RoPE (optional)
 
         # attention with heads in batch dim (maybe needed for FlashAttention) -> put the head dim back -> out projection
-        attn_output = nn.functional.scaled_dot_product_attention(*[t.flatten(0, 1) for t in (q, k, v)]).view(q.shape)
+        attn_output = scaled_dot_product_attention(*[t.flatten(0, 1) for t in (q, k, v)]).view(q.shape)
         del q, k, v  # save memory during inference
         return self.out_proj(attn_output.transpose(-3, -2).flatten(-2, -1))  # (batch_size, q_len, embed_dim)
 

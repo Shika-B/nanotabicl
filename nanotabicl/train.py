@@ -53,7 +53,7 @@ def train(cfg: Config) -> NanoTabICLv2:
 
     ckpt_path = os.path.join(cfg.out_dir, "latest.pt")
     if os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         step = ckpt["step"]
@@ -64,7 +64,8 @@ def train(cfg: Config) -> NanoTabICLv2:
 
     amp_dtype = getattr(torch, cfg.optim.amp_dtype)
     autocast = torch.autocast(device.type, dtype=amp_dtype, enabled=amp_dtype != torch.float32)
-    scaler = torch.amp.GradScaler(device.type, enabled=amp_dtype == torch.float16)  # bf16 needs no loss scaling
+    # scaler = torch.amp.GradScaler(device.type, enabled=amp_dtype == torch.float16) #  bf16 needs no loss scaling
+    scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda" and amp_dtype == torch.float16)
     loss_fn = pinball_loss if cfg.data.task == "regression" else cross_entropy_loss
     loader = iter_batches(cfg.data, seed=cfg.seed + step)
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters, device={device}, "

@@ -168,7 +168,7 @@ def rand_mlp_func(x: torch.Tensor, d_out: int) -> torch.Tensor:
 def rand_tree_func(x: torch.Tensor, d_out: int) -> torch.Tensor:
     n_trees = randlogint(1, 128)
     depth = randint(1, 8)
-    feature_imp = torch.clamp(x.std(dim=0, correction=0), 1e-8)
+    feature_imp = torch.clamp(x.std(dim=0, unbiased=False), 1e-8)
     feature_imp[~torch.isfinite(feature_imp)] = 1e-8
     split_dims = torch.multinomial(feature_imp, n_trees * depth, replacement=True)
     split_points = x[torch.randint(x.shape[0], size=(n_trees * depth,)), split_dims]
@@ -230,7 +230,7 @@ acts = [ # TabICLv1
     lambda x: (x >= 0.0).float(), lambda x: torch.exp(-(x**2)), lambda x: (torch.abs(x) <= 1.0).float(),
     # extra TabPFNv2 (some are unclear: power?, smooth relu might be softplus)
     lambda x: torch.log(torch.clamp(torch.abs(x), min=1e-6)),  # unclear how to handle log, here we do clamp+abs
-    F.sigmoid, torch.round, lambda x: x - torch.floor(x),  # modulo
+    torch.sigmoid, torch.round, lambda x: x - torch.floor(x),  # modulo
     lambda x: torch.argsort(torch.argsort(x, dim=-1), dim=-1).float(),  # converts x to ranks
     # new in TabICLv2
     F.logsigmoid, lambda x: F.softmax(x, dim=-1),
@@ -245,7 +245,7 @@ def rand_power_act(x: torch.Tensor) -> torch.Tensor:
     return torch.sign(x) * (x.abs() ** randlognum(0.1, 10.0))
 
 def standardize(x: torch.Tensor) -> torch.Tensor:
-    return (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, keepdim=True, correction=0) + 1e-4)
+    return (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, keepdim=True, unbiased=False) + 1e-4)
 
 def l2_normalize(x: torch.Tensor) -> torch.Tensor:
     return x / (x.square().sum(dim=-1).mean().sqrt() + 1e-8)
