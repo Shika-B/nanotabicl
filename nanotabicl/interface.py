@@ -14,7 +14,7 @@ from .runtime import build_model, resolve_device
 
 def load_model(path: str, device: str = "auto") -> tuple[torch.nn.Module, Config]:
     device = resolve_device(device)
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    ckpt = torch.load(path, map_location=device)
     config = {**ckpt["config"], "optim": dict(ckpt["config"].get("optim", {}))}
     config["optim"].pop("amp_dtype", None)  # compatibility with older checkpoints
     cfg = to_config(config)

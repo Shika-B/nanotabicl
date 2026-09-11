@@ -175,7 +175,7 @@ def train(cfg: Config) -> NanoTabICLv2:
         step = ckpt["step"]
         print(f"Resuming from {ckpt_path} at step {step}")
     elif cfg.init_from:  # start a new run (e.g. the next curriculum stage) from the weights of another checkpoint
-        model.load_state_dict(torch.load(cfg.init_from, map_location=device, weights_only=False)["model"])
+        model.load_state_dict(torch.load(cfg.init_from, map_location=device)["model"])
         print(f"Initialized model weights from {cfg.init_from}")
 
     loader = iter_batches(cfg.data, seed=cfg.seed + step)
