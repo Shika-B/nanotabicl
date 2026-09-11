@@ -154,17 +154,16 @@ class Rope(nn.Module):  # rotary positional encoding
         self.register_buffer("cos", torch.empty(0), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        with torch.autocast(x.device.type, enabled=False):  # rotations should be computed in full precision
-            batch_size, num_heads, seq_len, head_dim = x.shape
+        batch_size, num_heads, seq_len, head_dim = x.shape
 
-            if self.cos.numel() == 0 or self.cos.device != x.device or self.cos.size(0) < seq_len:  # need to extend cache
-                pos = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)  # (seq_len,)
-                angles = pos[:, None] * self.inv_freq[None, :]  # (seq_len, half_head_dim)
-                self.sin, self.cos = angles.sin(), angles.cos()  # (seq_len, half_head_dim)
+        if self.cos.numel() == 0 or self.cos.device != x.device or self.cos.size(0) < seq_len:  # need to extend cache
+            pos = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)  # (seq_len,)
+            angles = pos[:, None] * self.inv_freq[None, :]  # (seq_len, half_head_dim)
+            self.sin, self.cos = angles.sin(), angles.cos()  # (seq_len, half_head_dim)
 
-            sin, cos = self.sin[:seq_len], self.cos[:seq_len]
-            x1, x2 = x[..., :self.half].float(), x[..., self.half:].float()  # (batch_size, num_heads, seq_len, half_head_dim)
-            return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1).to(x.dtype)
+        sin, cos = self.sin[:seq_len], self.cos[:seq_len]
+        x1, x2 = x[..., :self.half], x[..., self.half:]  # (batch_size, num_heads, seq_len, half_head_dim)
+        return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
 
 
 class QASSMax(nn.Module):  # query-aware scalable softmax for better context length scaling

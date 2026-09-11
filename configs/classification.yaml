@@ -39,7 +39,6 @@ optim:
   matched_adamw_rms: 0.2
   warmup_frac: 0.01
   grad_clip: 10.0
-  amp_dtype: float32
 seed: 0
 device: auto
 out_dir: runs/classification

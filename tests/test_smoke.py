@@ -21,7 +21,11 @@ def test_train_resume_eval(tmp_path, task):
     assert (tmp_path / "latest.pt").exists()
     cfg.optim.max_steps = 3
     model = train(cfg)  # resumes from latest.pt and trains one more step
-    assert torch.load(tmp_path / "latest.pt", weights_only=False)["step"] == 3
+    checkpoint = torch.load(tmp_path / "latest.pt", weights_only=False)
+    assert checkpoint["step"] == 3
+    assert all(t.dtype == torch.float32 for t in checkpoint["model"].values() if t.is_floating_point())
+    assert all(state["momentum_buffer"].dtype == torch.float32
+               for state in checkpoint["optimizer"]["state"].values())
     assert len((tmp_path / "metrics.jsonl").read_text().splitlines()) == 3
     scores = evaluate(model.eval(), task, max_rows=100)
     assert len(scores) > 0 and all(np.isfinite(s) for s in scores.values())
@@ -90,3 +94,19 @@ def test_class_split_checks_each_target():
     # Flattening targets would conceal that the second target is constant.
     y = torch.tensor([[0, 1], [1, 1], [0, 1], [1, 1]])
     assert fix_class_split(y, n_train=2) is None
+
+
+def test_load_legacy_precision_checkpoint(tmp_path):
+    from dataclasses import asdict
+    from nanotabicl.interface import load_model
+
+    cfg = load_config([], TINY)
+    config = asdict(cfg)
+    config["optim"]["amp_dtype"] = "float32"  # retired field in existing checkpoints
+    path = tmp_path / "legacy.pt"
+    torch.save({"config": config, "model": build_model(cfg).state_dict()}, path)
+    model, loaded_cfg = load_model(str(path), device="cpu")
+    assert all(p.dtype == torch.float32 for p in model.parameters())
+    assert not hasattr(loaded_cfg.optim, "amp_dtype")
+    assert torch.get_float32_matmul_precision() == "highest"
+    assert not torch.backends.cudnn.allow_tf32

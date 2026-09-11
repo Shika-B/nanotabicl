@@ -15,7 +15,9 @@ from .runtime import build_model, resolve_device
 def load_model(path: str, device: str = "auto") -> tuple[torch.nn.Module, Config]:
     device = resolve_device(device)
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    cfg = to_config(ckpt["config"])
+    config = {**ckpt["config"], "optim": dict(ckpt["config"].get("optim", {}))}
+    config["optim"].pop("amp_dtype", None)  # compatibility with older checkpoints
+    cfg = to_config(config)
     model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])
     return model.eval(), cfg
@@ -32,7 +34,7 @@ class NanoTabICLEstimator(BaseEstimator):
         if len(X) != len(y) or len(X) < 2:
             raise ValueError("X and y must contain atleast two samples and the same number of samples")
         self.model_ = (load_model(self.model, self.device)[0] if isinstance(self.model, str)
-                       else self.model.to(resolve_device(self.device)).eval())
+                       else self.model.to(device=resolve_device(self.device), dtype=torch.float32).eval())
         self.X_train_ = np.asarray(X, dtype=np.float32)
         self.y_train_ = self._encode_y(np.asarray(y))
         return self
@@ -58,7 +60,7 @@ class NanoTabICLClassifier(ClassifierMixin, NanoTabICLEstimator):
 
     def _member(self, x, y, rng) -> torch.Tensor:  # class probabilities, predicted with a random class order
         perm = torch.randperm(len(self.classes_), generator=rng).to(x.device)
-        logits = self.model_(x, perm[y.long()].float()[None])[0, :, :len(self.classes_)].float()
+        logits = self.model_(x, perm[y.long()].float()[None])[0, :, :len(self.classes_)]
         return torch.softmax(logits, dim=-1)[:, perm]
 
     def predict_proba(self, X) -> np.ndarray:
@@ -76,7 +78,7 @@ class NanoTabICLRegressor(RegressorMixin, NanoTabICLEstimator):
         return preprocess(y).squeeze(-1).numpy()
 
     def _member(self, x, y, rng) -> torch.Tensor:  # quantiles of the standardized target
-        return self.model_(x, y[None])[0].float()
+        return self.model_(x, y[None])[0]
 
     def predict_quantiles(self, X, alphas=(0.1, 0.5, 0.9)) -> np.ndarray:  # (n_test, len(alphas))
         quantiles = self._predict(X)  # predicted at levels linspace(0, 1, n_quantiles + 2)[1:-1]

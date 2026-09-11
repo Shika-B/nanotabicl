@@ -50,7 +50,6 @@ class OptimConfig:
     matched_adamw_rms: float = 0.2
     warmup_frac: float = 0.01  # linear warmup for this fraction of max_steps, then cosine decay to zero
     grad_clip: float = 10.0
-    amp_dtype: str = "float32"  # autocast dtype: "float32" (off), "bfloat16" or "float16"
 
 
 @dataclass

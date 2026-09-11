@@ -1,4 +1,4 @@
-"""Training loop: gradient accumulation over micro-batches, AMP, warmup + cosine schedule, checkpointing, logging."""
+"""Training loop: gradient accumulation over micro-batches, float32, warmup + cosine schedule, checkpointing, logging."""
 import json
 import math
 import os
@@ -23,6 +23,31 @@ def cross_entropy_loss(pred: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tenso
     loss = F.cross_entropy(pred.flatten(0, 1), y.flatten().long())
     return loss, {"accuracy": (pred.argmax(dim=-1) == y).float().mean()}
 
+def factorization_gap(p_a: torch.Tensor, p_b: torch.Tensor,
+                      p_b_given_a: torch.Tensor, p_a_given_b: torch.Tensor) -> torch.Tensor:
+    """Mean total variation between the A->B and B->A joint predictions.
+
+    Inputs are probabilities, normalized over their last axis (not logits):
+      p_a: (..., K_A), p_b: (..., K_B)
+      p_b_given_a: (..., K_A, K_B), p_a_given_b: (..., K_B, K_A).
+    Leading dimensions must match, typically (batch, test_rows). Conditionals
+    must include every conditioning class, not just the observed target value.
+    Mask unused output classes before softmax when preparing probabilities.
+
+    Returns a scalar: mean over examples of 0.5 * sum_{a,b} |p(a)p(b|a)-p(b)p(a|b)|.
+    Gradients flow through all four inputs.
+    """
+    if p_a.ndim < 1 or p_b.ndim < 1 or p_a.shape[:-1] != p_b.shape[:-1]:
+        raise ValueError("Marginals must have matching leading dimensions and a class axis.")
+    joint_shape = (*p_a.shape, p_b.shape[-1])
+    reverse_shape = (*p_b.shape, p_a.shape[-1])
+    if p_b_given_a.shape != joint_shape or p_a_given_b.shape != reverse_shape:
+        raise ValueError("Expected conditionals shaped (..., K_A, K_B) and (..., K_B, K_A).")
+    joint_ab = p_a.unsqueeze(-1) * p_b_given_a
+    joint_ba = (p_b.unsqueeze(-1) * p_a_given_b).transpose(-1, -2)
+    return 0.5 * (joint_ab - joint_ba).abs().sum(dim=(-2, -1)).mean()
+
+
 def pinball_loss(pred: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, dict]:
     # pred: (n_batch, n_test, n_quantiles) at levels linspace(0, 1, n_quantiles + 2)[1:-1], y: (n_batch, n_test)
     alphas = torch.linspace(0, 1, pred.shape[-1] + 2, device=pred.device)[1:-1]
@@ -44,7 +69,6 @@ def train(cfg: Config) -> NanoTabICLv2:
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     device = resolve_device(cfg.device)
-    torch.set_float32_matmul_precision("high")  # allow TF32 matmuls on GPUs
     os.makedirs(cfg.out_dir, exist_ok=True)
     OmegaConf.save(OmegaConf.structured(cfg), os.path.join(cfg.out_dir, "config.yaml"))
 
@@ -64,10 +88,6 @@ def train(cfg: Config) -> NanoTabICLv2:
         model.load_state_dict(torch.load(cfg.init_from, map_location=device, weights_only=False)["model"])
         print(f"Initialized model weights from {cfg.init_from}")
 
-    amp_dtype = getattr(torch, cfg.optim.amp_dtype)
-    autocast = torch.autocast(device.type, dtype=amp_dtype, enabled=amp_dtype != torch.float32)
-    # scaler = torch.amp.GradScaler(device.type, enabled=amp_dtype == torch.float16) #  bf16 needs no loss scaling
-    scaler = torch.cuda.amp.GradScaler(enabled=device.type == "cuda" and amp_dtype == torch.float16)
     loss_fn = pinball_loss if cfg.data.task == "regression" else cross_entropy_loss
     loader = iter_batches(cfg.data, seed=cfg.seed + step)
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters, device={device}, "
@@ -86,17 +106,14 @@ def train(cfg: Config) -> NanoTabICLv2:
             x, y, n_train = next(loader)
             t_data += time.time() - t0
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            with autocast:
-                pred = model(x, y[:, :n_train])
-            loss, extra = loss_fn(pred.float(), y[:, n_train:])
-            scaler.scale(loss / cfg.optim.accum_steps).backward()
+            pred = model(x, y[:, :n_train])
+            loss, extra = loss_fn(pred, y[:, n_train:])
+            (loss / cfg.optim.accum_steps).backward()
             for name, value in {"loss": loss.detach(), **extra}.items():  # stays on device, no sync per micro-batch
                 metrics[name] = metrics.get(name, 0.0) + value / cfg.optim.accum_steps
 
-        scaler.unscale_(optimizer)
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optim.grad_clip or float("inf"))
-        scaler.step(optimizer)
-        scaler.update()
+        optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         step += 1
 

@@ -18,6 +18,8 @@ def resolve_device(name: str) -> torch.device:
 
 
 def build_model(cfg: Config) -> NanoTabICLv2:
+    torch.set_float32_matmul_precision("highest")  # full float32 CUDA matmuls
+    torch.backends.cudnn.allow_tf32 = False
     regression = cfg.data.task == "regression"
     return NanoTabICLv2(max_classes=0 if regression else cfg.data.max_classes,
-                        out_dim=cfg.data.n_quantiles if regression else cfg.data.max_classes, **asdict(cfg.model))
+                        out_dim=cfg.data.n_quantiles if regression else cfg.data.max_classes, **asdict(cfg.model)).float()
