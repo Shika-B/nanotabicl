@@ -60,3 +60,33 @@ def test_sklearn_interface(task):
     else:
         reg = NanoTabICLRegressor(model=build_model(cfg), device="cpu").fit(x[:30], y[:30].astype(float))
         assert reg.predict(x[30:]).shape == (10,) and reg.predict_quantiles(x[30:]).shape == (10, 3)
+
+
+@pytest.mark.parametrize("task", ["classification", "regression"])
+@pytest.mark.parametrize("filtered", [False, True])
+def test_two_target_batch(task, filtered):
+    torch.manual_seed(0)
+    np.random.seed(0)
+    cfg = load_config(["configs/small.yaml"], [
+        "data.n_targets=2", "data.max_classes=4", "data.micro_batch_size=2",
+        "data.min_seq_len=64", "data.max_seq_len=64", "data.max_features=6",
+        f"data.task={task}", f"data.filter_unpredictable={filtered}",
+    ])
+    x, y, n_train = PriorDataset(cfg.data).sample_batch()
+    assert y.shape == (*x.shape[:2], 2)
+    assert torch.isfinite(x).all() and torch.isfinite(y).all()
+    if task == "classification":
+        assert (y == y.long()).all() and y.min() >= 0 and y.max() < 4
+        for target in y.transpose(1, 2).flatten(0, 1):
+            assert target[:n_train].unique().numel() >= 2
+            assert torch.equal(target[:n_train].unique(), target[n_train:].unique())
+    else:
+        assert torch.allclose(y[:, :n_train].mean(dim=1), torch.zeros(2, 2), atol=1e-5)
+
+
+def test_class_split_checks_each_target():
+    from nanotabicl.data import fix_class_split
+
+    # Flattening targets would conceal that the second target is constant.
+    y = torch.tensor([[0, 1], [1, 1], [0, 1], [1, 1]])
+    assert fix_class_split(y, n_train=2) is None

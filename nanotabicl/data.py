@@ -12,9 +12,12 @@ from .prior import rand_cat_sizes, rand_dataset_filtered, rand_dataset_plain, ra
 
 class PriorDataset(IterableDataset):
     """Yields micro-batches (x, y, n_train) with x: (micro_batch_size, n_rows, n_features), y: (micro_batch_size, n_rows).
+    With n_targets > 1, y has shape (micro_batch_size, n_rows, n_targets).
     Rows [:n_train] are the training rows. Class labels are stored as floats."""
 
     def __init__(self, cfg: DataConfig):
+        if cfg.n_targets < 1:
+            raise ValueError("n_targets must be positive")
         self.cfg = cfg
         self.regression = cfg.task == "regression"
 
@@ -35,12 +38,14 @@ class PriorDataset(IterableDataset):
         cfg = self.cfg
         generate = rand_dataset_filtered if cfg.filter_unpredictable else rand_dataset_plain
         while True:  # rejection sampling until we get a valid dataset
-            n_classes = 0 if self.regression else randint(2, cfg.max_classes + 1)  # 0 = numerical target
-            columns = generate(rand_cat_sizes(n_features, cfg.max_cat_size), [n_classes], n_rows)
+            class_sizes = [0 if self.regression else randint(2, cfg.max_classes + 1)
+                           for _ in range(cfg.n_targets)]  # 0 = numerical target
+            columns = generate(rand_cat_sizes(n_features, cfg.max_cat_size), class_sizes, n_rows)
             x = torch.cat([columns[f"x_{i}"] for i in range(n_features)], dim=-1).float()
-            y = columns["y_0"].float().squeeze(-1)
+            y = torch.cat([columns[f"y_{i}"] for i in range(cfg.n_targets)], dim=-1).float()
             if not self.regression:
-                y = torch.randperm(n_classes)[y.long()].float()  # random label permutation
+                for i, n_classes in enumerate(class_sizes):
+                    y[:, i] = torch.randperm(n_classes)[y[:, i].long()].float()  # independent label permutations
                 row_perm = fix_class_split(y, n_train)
                 if row_perm is None:
                     continue
@@ -50,8 +55,8 @@ class PriorDataset(IterableDataset):
                 continue
             x = preprocess(x, n_train)[:, torch.randperm(x.shape[1])]
             if self.regression:
-                y = preprocess(y[:, None], n_train).squeeze(-1)
-            return x, y
+                y = preprocess(y, n_train)
+            return x, y.squeeze(-1) if cfg.n_targets == 1 else y
 
 
 def rand_size(low: int, high: int, log_uniform: bool) -> int:  # random int in [low, high]
@@ -59,11 +64,13 @@ def rand_size(low: int, high: int, log_uniform: bool) -> int:  # random int in [
 
 
 def fix_class_split(y: torch.Tensor, n_train: int, n_attempts: int = 10) -> torch.Tensor | None:
-    """Returns a row permutation such that train and test rows contain the same >= 2 classes, or None if none found."""
+    """Find one row permutation with the same >= 2 classes in both splits for every target, or return None."""
+    if y.ndim == 1:
+        y = y[:, None]
     perm = torch.arange(len(y))
     for _ in range(n_attempts):
-        train_classes, test_classes = torch.unique(y[perm[:n_train]]), torch.unique(y[perm[n_train:]])
-        if len(train_classes) >= 2 and torch.equal(train_classes, test_classes):
+        if all(len(train_classes := torch.unique(col[perm[:n_train]])) >= 2
+               and torch.equal(train_classes, torch.unique(col[perm[n_train:]])) for col in y.T):
             return perm
         perm = torch.randperm(len(y))
     return None

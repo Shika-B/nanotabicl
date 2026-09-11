@@ -36,27 +36,30 @@ def rand_dataset_filtered(x_cat_sizes: list[int], y_cat_sizes: list[int], n_samp
 
         # ----- ExtraTrees filtering check -----
         X_np = torch.cat([t.float() for name, t in tensors.items() if name.startswith('x')], dim=-1).numpy()
-        y = tensors['y_0']
+        for i, cat_size in enumerate(y_cat_sizes):
+            y = tensors[f"y_{i}"]
 
-        if y_cat_sizes[0] > 0:  # classification
-            y = y.long().squeeze(-1)
-            y = F.one_hot(y, num_classes=int(y.max().item() + 1)).float()  # (n, n_classes)
-            y = y[:, :1] if y.shape[1] == 2 else y  # drop one dimension for binary to make it faster
+            if cat_size > 0:  # classification
+                y = y.long().squeeze(-1)
+                y = F.one_hot(y, num_classes=int(y.max().item() + 1)).float()  # (n, n_classes)
+                y = y[:, :1] if y.shape[1] == 2 else y  # drop one dimension for binary to make it faster
 
-        Y_np = y.float().cpu().numpy()
+            Y_np = y.float().cpu().numpy()
 
-        # random_state=0 doesn't give OOB scores for all samples for some 133 <= n <= 257
-        et = ExtraTreesRegressor(n_estimators=25, bootstrap=True, oob_score=True, n_jobs=1, random_state=1,
-                                 max_depth=6).fit(X_np, Y_np[:, 0] if Y_np.shape[1] == 1 else Y_np)
+            # random_state=0 doesn't give OOB scores for all samples for some 133 <= n <= 257
+            et = ExtraTreesRegressor(n_estimators=25, bootstrap=True, oob_score=True, n_jobs=1, random_state=1,
+                                     max_depth=6).fit(X_np, Y_np[:, 0] if Y_np.shape[1] == 1 else Y_np)
 
-        # compute improvement in MSE over mean prediction baseline per sample
-        Yhat = et.oob_prediction_[:, None] if len(et.oob_prediction_.shape) == 1 else et.oob_prediction_  # (n, d)
-        mask = ~np.isnan(Yhat).any(axis=1)  # keep only valid out-of-bag rows
-        imp = ((Y_np[mask] - Y_np.mean(axis=0, keepdims=True)) ** 2 - (Y_np[mask] - Yhat[mask]) ** 2).sum(axis=1)
-        idx = np.random.default_rng(0).integers(0, len(imp), size=(200, len(imp)))  # 200 bootstrap samples
-        pval = float(np.mean(imp[idx].mean(axis=1) <= 0.0))  # vectorized bootstrap
+            # compute improvement in MSE over mean prediction baseline per sample
+            Yhat = et.oob_prediction_[:, None] if len(et.oob_prediction_.shape) == 1 else et.oob_prediction_  # (n, d)
+            mask = ~np.isnan(Yhat).any(axis=1)  # keep only valid out-of-bag rows
+            imp = ((Y_np[mask] - Y_np.mean(axis=0, keepdims=True)) ** 2 - (Y_np[mask] - Yhat[mask]) ** 2).sum(axis=1)
+            idx = np.random.default_rng(0).integers(0, len(imp), size=(200, len(imp)))  # 200 bootstrap samples
+            pval = float(np.mean(imp[idx].mean(axis=1) <= 0.0))  # vectorized bootstrap
 
-        if pval < 0.05:
+            if not pval < 0.05:
+                break
+        else:  # every target must be predictable from X
             return tensors
 
 def rand_cat_sizes(n_features: int, max_cat_size: int = 100) -> list[int]:

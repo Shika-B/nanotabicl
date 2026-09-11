@@ -23,6 +23,7 @@ class ModelConfig:  # mirrors the keyword arguments of NanoTabICLv2
 @dataclass
 class DataConfig:
     task: str = "classification"  # "classification" or "regression"
+    n_targets: int = 1  # number of jointly sampled target columns
     max_classes: int = 10  # classification: output dim, upper bound for the sampled number of classes
     n_quantiles: int = 999  # regression: output dim, quantile levels are linspace(0, 1, n_quantiles + 2)[1:-1]
     micro_batch_size: int = 4  # datasets per micro-batch; they share n_rows, n_train and n_features

@@ -39,6 +39,8 @@ def lr_schedule(step: int, cfg: OptimConfig) -> float:  # linear warmup, then co
 
 
 def train(cfg: Config) -> NanoTabICLv2:
+    if cfg.data.n_targets != 1:
+        raise ValueError("Training requires data.n_targets=1 until multi-target loss integration is implemented.")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     device = resolve_device(cfg.device)
