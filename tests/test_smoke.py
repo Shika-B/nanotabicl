@@ -14,9 +14,13 @@ TINY = ["model.embed_dim=16", "model.col_num_blocks=1", "model.row_num_blocks=1"
         "data.filter_unpredictable=false", "optim.max_steps=2", "optim.accum_steps=2", "save_every=1", "log_every=1"]
 
 
-@pytest.mark.parametrize("task", ["classification", "regression"])
-def test_train_resume_eval(tmp_path, task):
-    cfg = load_config([], TINY + [f"data.task={task}", f"out_dir={tmp_path}"])
+@pytest.mark.parametrize("task,n_targets,lambda_fg", [
+    ("classification", 1, 0), ("regression", 1, 0),
+    ("classification", 2, 0), ("classification", 2, 0.3),
+])
+def test_train_resume_eval(tmp_path, task, n_targets, lambda_fg):
+    cfg = load_config([], TINY + [f"data.task={task}", f"out_dir={tmp_path}",
+                                 f"data.n_targets={n_targets}", f"optim.lambda_fg={lambda_fg}"])
     train(cfg)
     assert (tmp_path / "latest.pt").exists()
     cfg.optim.max_steps = 3

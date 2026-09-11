@@ -54,7 +54,7 @@ random feature/class orders:
 ```python
 from nanotabicl import NanoTabICLClassifier, NanoTabICLRegressor
 
-clf = NanoTabICLClassifier(model="runs/small/latest.pt", n_estimators=8).fit(X_train, y_train)
+clf = NanoTabICLClassifier(model="runs/small_two_target/latest.pt", n_estimators=8).fit(X_train, y_train)
 proba = clf.predict_proba(X_test)
 
 reg = NanoTabICLRegressor(model="runs/regression/latest.pt").fit(X_train, y_train)
@@ -79,13 +79,34 @@ python -m pip install -e ".[dev]"
 python -m pip install -e ".[dev]" "wandb==0.21.4" 
 ```
 
-To run the small configuration first, use the following commands. While it is intended as a development run, it still performs relatively well (see figures below)
+The small configuration trains two categorical targets with the mean cross-entropy of
+A|X, B|X, A|B,X, and B|A,X, plus `optim.lambda_fg` times their factorization gap.
+The penalty defaults to zero. Conditional views append the other target as a feature:
+observed values in context rows, enumerated class values in query rows. Both control
+and penalized runs perform the same enumeration; conditional cross-entropy uses the
+observed query label of the other target. Class probabilities are normalized over
+each target's classes present in the context.
+
+Use separate output directories and the same seed to compare objectives from the same initialization:
+
+```bash
+python -m nanotabicl.train configs/small.yaml optim.lambda_fg=0 seed=0 out_dir=runs/fg_control
+python -m nanotabicl.train configs/small.yaml optim.lambda_fg=0.3 seed=0 out_dir=runs/fg_penalized
+```
+
+Logs include per-view cross-entropy and accuracy, mean `ce`, `factorization_gap`, and
+total `loss`. Enumeration uses `2 + 2 * data.max_classes` forward passes per micro-batch.
+For cheaper experiments, set `data.max_classes=4` in both runs; those models can only
+evaluate tasks with up to four classes. Single-target training remains available with
+`data.n_targets=1 optim.lambda_fg=0`.
+
+To run and evaluate the default small configuration:
 
 ```bash
 python -m nanotabicl.train configs/small.yaml
-python -m nanotabicl.eval runs/small/latest.pt
+python -m nanotabicl.eval runs/small_two_target/latest.pt
 ```
-Which gives:
+Historical results from the original single-target small configuration (not the new two-target setup):
 | Dataset | Score |
 |---|---:|
 | iris | 0.920 |

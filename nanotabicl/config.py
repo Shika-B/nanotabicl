@@ -42,6 +42,7 @@ class DataConfig:
 
 @dataclass
 class OptimConfig:
+    lambda_fg: float = 0.0  # factorization-gap weight for two-target classification
     max_steps: int = 500_000
     accum_steps: int = 16  # micro-batches per optimizer step (batch size = accum_steps * data.micro_batch_size)
     lr: float = 8e-4  # Muon step size, scaled to match the update RMS of AdamW (so on the AdamW scale)

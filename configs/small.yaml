@@ -10,16 +10,18 @@ model:
   n_cls_rows: 32
 data:
   task: classification
+  n_targets: 2
   micro_batch_size: 4
   min_seq_len: 64
   max_seq_len: 256
   max_features: 20
   num_workers: 4
 optim:
+  lambda_fg: 0.0
   max_steps: 500
   accum_steps: 4
   lr: 3.0e-3
   warmup_frac: 0.1
-out_dir: runs/small
+out_dir: runs/small_two_target
 log_every: 5
 save_every: 50

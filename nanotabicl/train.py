@@ -56,6 +56,92 @@ def pinball_loss(pred: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, dic
     return loss, {"median_mse": (pred.detach()[..., pred.shape[-1] // 2] - y).square().mean()}
 
 
+def conditional_logits(model: NanoTabICLv2, x: torch.Tensor, target: torch.Tensor,
+                       condition: torch.Tensor, n_train: int, n_classes: int) -> torch.Tensor:
+    """Predict the target for every possible value of the conditioning target.
+
+    For P(B | A, X), pass target=B and condition=A. Let M be the batch size,
+    N the total rows, T the context rows, and F the original feature count.
+
+    Args:
+        model: Predictor returning logits shaped (M, N - T, K_B).
+        x: Features shaped (M, N, F), with context rows first.
+        target: B labels shaped (M, N); only target[:, :T] enters the model.
+        condition: A labels shaped (M, N); only condition[:, :T] is used.
+        n_train: Number T of context rows.
+        n_classes: Number K_A of conditioning class values to enumerate.
+
+    For each a in range(K_A), build a column shaped (M, N) containing observed
+    A labels in context rows and the constant a in every query row. Append it
+    to x to obtain (M, N, F + 1), then predict using context B labels (M, T).
+    Each forward returns (M, N - T, K_B); stack these along the A-value axis.
+    The predicted target is never appended as a feature.
+
+    Returns:
+        Raw logits shaped (M, N - T, K_A, K_B). Entry [m, i, a, b] is the
+        logit for B=b at query row i of table m, assuming A=a. softmax(-1)
+        normalizes over B classes. The current caller uses the configured
+        max_classes capacity for both axes (inferred from model output) and
+        masks unsupported output classes in loss_fn before softmax.
+    """
+    predictions = []
+    for value in range(n_classes):
+        column = torch.cat([condition[:, :n_train], torch.full_like(condition[:, n_train:], value)], dim=1)
+        predictions.append(model(torch.cat([x, column.unsqueeze(-1)], dim=-1), target[:, :n_train]))
+    return torch.stack(predictions, dim=-2)
+
+
+def loss_fn(model: NanoTabICLv2, x: torch.Tensor, y: torch.Tensor, n_train: int,
+            task: str = "classification", lambda_fg: float = 0.0) -> tuple[torch.Tensor, dict]:
+    """Single-target loss, or mean four-view CE + lambda_fg * factorization gap.
+
+    Two-target training enumerates the same conditionals even at lambda_fg=0,
+    keeping supervision and forward computation identical for the control.
+    Class support comes exclusively from context rows, including noncontiguous
+    labels. Conditional CE selects the observed other label from the enumeration.
+    """
+    if not math.isfinite(lambda_fg) or lambda_fg < 0:
+        raise ValueError("lambda_fg must be finite and nonnegative")
+    if y.ndim == 2:
+        if lambda_fg != 0:
+            raise ValueError("lambda_fg requires two classification targets")
+        pred = model(x, y[:, :n_train])
+        return (pinball_loss if task == "regression" else cross_entropy_loss)(pred, y[:, n_train:])
+    if task != "classification" or y.ndim != 3 or y.shape[-1] != 2:
+        raise ValueError("Multi-target training requires exactly two classification targets")
+
+    a, b = y.unbind(-1)
+    logits_a, logits_b = model(x, a[:, :n_train]), model(x, b[:, :n_train])
+    n_classes = logits_a.shape[-1]
+    support_a = F.one_hot(a[:, :n_train].long(), n_classes).bool().any(dim=1)
+    support_b = F.one_hot(b[:, :n_train].long(), n_classes).bool().any(dim=1)
+    logits_a = logits_a.masked_fill(~support_a[:, None, :], -torch.inf)
+    logits_b = logits_b.masked_fill(~support_b[:, None, :], -torch.inf)
+    logits_b_given_a = conditional_logits(model, x, b, a, n_train, n_classes)
+    logits_a_given_b = conditional_logits(model, x, a, b, n_train, n_classes)
+    logits_b_given_a = logits_b_given_a.masked_fill(~support_b[:, None, None, :], -torch.inf)
+    logits_a_given_b = logits_a_given_b.masked_fill(~support_a[:, None, None, :], -torch.inf)
+
+    a_test, b_test = a[:, n_train:], b[:, n_train:]
+    observed_b_given_a = logits_b_given_a.gather(
+        -2, a_test.long()[..., None, None].expand(-1, -1, 1, n_classes)).squeeze(-2)
+    observed_a_given_b = logits_a_given_b.gather(
+        -2, b_test.long()[..., None, None].expand(-1, -1, 1, n_classes)).squeeze(-2)
+    views = [("a", logits_a, a_test), ("b", logits_b, b_test),
+             ("a_given_b", observed_a_given_b, a_test), ("b_given_a", observed_b_given_a, b_test)]
+    losses, metrics = [], {}
+    for name, logits, labels in views:
+        ce, extra = cross_entropy_loss(logits, labels)
+        losses.append(ce)
+        metrics[f"ce_{name}"] = ce.detach()
+        metrics[f"accuracy_{name}"] = extra["accuracy"]
+    ce = torch.stack(losses).mean()
+    gap = factorization_gap(logits_a.softmax(-1), logits_b.softmax(-1),
+                            logits_b_given_a.softmax(-1), logits_a_given_b.softmax(-1))
+    metrics.update(ce=ce.detach(), factorization_gap=gap.detach())
+    return ce + lambda_fg * gap, metrics
+
+
 def lr_schedule(step: int, cfg: OptimConfig) -> float:  # linear warmup, then cosine decay to zero
     warmup = cfg.warmup_frac * cfg.max_steps
     if step < warmup:
@@ -64,8 +150,12 @@ def lr_schedule(step: int, cfg: OptimConfig) -> float:  # linear warmup, then co
 
 
 def train(cfg: Config) -> NanoTabICLv2:
-    if cfg.data.n_targets != 1:
-        raise ValueError("Training requires data.n_targets=1 until multi-target loss integration is implemented.")
+    if cfg.data.n_targets not in (1, 2) or (cfg.data.n_targets == 2 and cfg.data.task != "classification"):
+        raise ValueError("Training supports one target, or two classification targets")
+    if not math.isfinite(cfg.optim.lambda_fg) or cfg.optim.lambda_fg < 0:
+        raise ValueError("lambda_fg must be finite and nonnegative")
+    if cfg.optim.lambda_fg != 0 and cfg.data.n_targets != 2:
+        raise ValueError("lambda_fg requires two classification targets")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     device = resolve_device(cfg.device)
@@ -88,7 +178,6 @@ def train(cfg: Config) -> NanoTabICLv2:
         model.load_state_dict(torch.load(cfg.init_from, map_location=device, weights_only=False)["model"])
         print(f"Initialized model weights from {cfg.init_from}")
 
-    loss_fn = pinball_loss if cfg.data.task == "regression" else cross_entropy_loss
     loader = iter_batches(cfg.data, seed=cfg.seed + step)
     print(f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M parameters, device={device}, "
           f"batch size={cfg.optim.accum_steps * cfg.data.micro_batch_size}", flush=True)
@@ -106,8 +195,7 @@ def train(cfg: Config) -> NanoTabICLv2:
             x, y, n_train = next(loader)
             t_data += time.time() - t0
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            pred = model(x, y[:, :n_train])
-            loss, extra = loss_fn(pred, y[:, n_train:])
+            loss, extra = loss_fn(model, x, y, n_train, cfg.data.task, cfg.optim.lambda_fg)
             (loss / cfg.optim.accum_steps).backward()
             for name, value in {"loss": loss.detach(), **extra}.items():  # stays on device, no sync per micro-batch
                 metrics[name] = metrics.get(name, 0.0) + value / cfg.optim.accum_steps
