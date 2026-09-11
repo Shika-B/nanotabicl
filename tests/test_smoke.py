@@ -31,7 +31,7 @@ def test_train_resume_eval(tmp_path, task, n_targets, lambda_fg):
     assert all(state["momentum_buffer"].dtype == torch.float32
                for state in checkpoint["optimizer"]["state"].values())
     assert len((tmp_path / "metrics.jsonl").read_text().splitlines()) == 3
-    scores = evaluate(model.eval(), task, max_rows=100)
+    scores = evaluate(model.eval(), task, max_rows=100, include_pairs=False)
     assert len(scores) > 0 and all(np.isfinite(s) for s in scores.values())
 
 

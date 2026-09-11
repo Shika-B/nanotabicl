@@ -114,6 +114,45 @@ Historical results from the original single-target small configuration (not the 
 | breast_cancer | 0.933 |
 | digits | 0.904 |
 
+### Classification and coherence evaluation
+
+Compare checkpoints with identical context sizes and split seeds:
+
+```bash
+python -m nanotabicl.eval runs/fg_control/latest.pt runs/fg_penalized/latest.pt \
+  --context-sizes 32 64 128 --seeds 0 1 2 --output runs/fg_comparison.json
+```
+
+The original Iris, Wine, Breast Cancer and Digits tasks report accuracy, log loss,
+and multiclass Brier score. The additional benchmarks are:
+
+| Dataset | A | B | Features excluded |
+|---|---|---|---|
+| [Car Evaluation (Bohanec)](https://archive.ics.uci.edu/dataset/19/car+evaluation) | Acceptability | Safety | Both targets |
+| [Nursery (Rajkovic)](https://archive.ics.uci.edu/dataset/76/nursery) | Recommendation | Health | Both targets |
+| [Student Performance (Cortez)](https://archive.ics.uci.edu/dataset/320/student+performance) | G2 >= 10 | G3 >= 10 | G1, G2, G3 |
+
+UCI datasets are CC BY 4.0; archives download once into `runs/eval_data`.
+Math and Portuguese students are evaluated separately because the courses overlap.
+Each paired benchmark reports accuracy, log loss and Brier score for A, B,
+A given B, B given A, and each of the two joint factorizations, plus their mean
+total-variation factorization gap. Brier scores sum over classes, then average
+over examples; log loss uses natural logarithms and a probability floor of 1e-12.
+
+Splits are uniform and fixed by seed, with up to 256 query rows. Category encodings
+and feature preprocessing are fitted on context only. Rare labels are not dropped
+or forced into context; classes absent from context get zero predicted probability,
+and `unseen_a_rate` / `unseen_b_rate` report their query frequency. In particular,
+Nursery has only two examples of the `recommend` class. Interpret gap alongside
+prediction scores and these coverage diagnostics.
+
+Paired tasks default to one ensemble member (`--n-estimators`); the original
+benchmarks retain their eight-member estimator. Compare identical settings across
+checkpoints and retain per-seed results rather than treating query rows as independent
+training runs. The full suite requires capacity for ten classes; Nursery alone needs
+five. `--skip-pairs` runs the original benchmarks without downloading UCI data.
+Regression evaluation keeps its original datasets and R² calculation.
+
 The reference stage-1 configurations are:
 
 ```bash
