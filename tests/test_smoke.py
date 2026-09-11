@@ -11,7 +11,8 @@ from nanotabicl.train import build_model, train
 TINY = ["model.embed_dim=16", "model.col_num_blocks=1", "model.row_num_blocks=1", "model.icl_num_blocks=2",
         "model.col_nhead=2", "model.row_nhead=2", "model.icl_nhead=2", "model.n_cls_rows=8",
         "data.micro_batch_size=2", "data.min_seq_len=32", "data.max_seq_len=64", "data.max_features=6", "data.num_workers=0",
-        "data.filter_unpredictable=false", "optim.max_steps=2", "optim.accum_steps=2", "save_every=1", "log_every=1"]
+        "data.filter_unpredictable=false", "optim.max_steps=2", "optim.accum_steps=2", "save_every=1", "log_every=1",
+        "validation.n_tables=2", "validation.every=1", "optim.warmup_steps=0"]
 
 
 @pytest.mark.parametrize("task,n_targets,lambda_fg", [
@@ -23,6 +24,7 @@ def test_train_resume_eval(tmp_path, task, n_targets, lambda_fg):
                                  f"data.n_targets={n_targets}", f"optim.lambda_fg={lambda_fg}"])
     train(cfg)
     assert (tmp_path / "latest.pt").exists()
+    assert (tmp_path / "best.pt").exists() and (tmp_path / "validation.pt").exists()
     cfg.optim.max_steps = 3
     model = train(cfg)  # resumes from latest.pt and trains one more step
     checkpoint = torch.load(tmp_path / "latest.pt", weights_only=False)
