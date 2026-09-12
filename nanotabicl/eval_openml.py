@@ -39,7 +39,8 @@ def prepare_features(frame, categorical, context, query):
 
 
 def evaluate_task(task, models, args):
-    if getattr(task, "task_type_id", 1) != 1:  # OpenML supervised classification
+    task_type = getattr(task, "task_type_id", 1)
+    if getattr(task_type, "value", task_type) != 1:  # OpenML uses an Enum in newer versions
         return {"status": "skipped", "reason": "Not a classification task"}
     dataset = task.get_dataset()
     max_rows = getattr(args, "max_dataset_rows", 0)
@@ -181,7 +182,8 @@ def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="open
                 result = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
             payload["tasks"][str(task_id)] = result
             output.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n")
-            print(f"Task {task_id}: {result['status']}", file=sys.stderr, flush=True)
+            reason = f" — {result['reason']}" if "reason" in result else ""
+            print(f"Task {task_id}: {result['status']}{reason}", file=sys.stderr, flush=True)
     path = Path(args.html)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(report_html(payload, args.metric), encoding="utf-8")

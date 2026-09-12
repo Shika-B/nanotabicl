@@ -1,4 +1,7 @@
 from types import SimpleNamespace
+from enum import Enum
+
+import pytest
 
 from nanotabicl.eval_openml import evaluate_task, report_html
 from nanotabicl import eval_tabarena
@@ -14,16 +17,24 @@ def test_tabarena_defaults(monkeypatch):
     assert settings["max_dataset_rows"] == 10000 and settings["max_features"] == 100
 
 
-def test_regression_skipped_before_download():
-    result = evaluate_task(SimpleNamespace(task_type_id=2), [], SimpleNamespace())
+class TaskType(Enum):
+    CLASSIFICATION = 1
+    REGRESSION = 2
+
+
+@pytest.mark.parametrize("task_type", [2, TaskType.REGRESSION])
+def test_regression_skipped_before_download(task_type):
+    result = evaluate_task(SimpleNamespace(task_type_id=task_type), [], SimpleNamespace())
     assert result["status"] == "skipped" and "classification" in result["reason"]
 
 
-def test_size_filters():
+@pytest.mark.parametrize("task_type", [1, TaskType.CLASSIFICATION])
+def test_size_filters(task_type):
     dataset = SimpleNamespace(name="large", qualities={"NumberOfInstances": 20000})
-    task = SimpleNamespace(task_type_id=1, target_name="y", get_dataset=lambda: dataset)
+    task = SimpleNamespace(task_type_id=task_type, target_name="y", get_dataset=lambda: dataset)
     args = SimpleNamespace(max_dataset_rows=10000, max_features=100)
-    assert evaluate_task(task, [], args)["status"] == "skipped"
+    result = evaluate_task(task, [], args)
+    assert result["status"] == "skipped" and "rows" in result["reason"]
     dataset.qualities = {}
     dataset.get_data = lambda **kwargs: (SimpleNamespace(shape=(10, 101)), None, None, None)
     args.max_dataset_rows = 0
