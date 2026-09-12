@@ -39,8 +39,20 @@ def prepare_features(frame, categorical, context, query):
 
 
 def evaluate_task(task, models, args):
+    if getattr(task, "task_type_id", 1) != 1:  # OpenML supervised classification
+        return {"status": "skipped", "reason": "Not a classification task"}
     dataset = task.get_dataset()
+    max_rows = getattr(args, "max_dataset_rows", 0)
+    max_features = getattr(args, "max_features", 0)
+    # Metadata lets us avoid downloading oversized tables where available.
+    qualities = getattr(dataset, "qualities", {}) or {}
+    if max_rows and qualities.get("NumberOfInstances", 0) > max_rows:
+        return {"name": dataset.name, "status": "skipped", "reason": f"Dataset exceeds {max_rows} rows"}
     frame, labels, categorical, _ = dataset.get_data(target=task.target_name, dataset_format="dataframe")
+    if max_rows and len(frame) > max_rows:
+        return {"name": dataset.name, "status": "skipped", "reason": f"{len(frame)} rows exceeds limit {max_rows}"}
+    if max_features and frame.shape[1] > max_features:
+        return {"name": dataset.name, "status": "skipped", "reason": f"{frame.shape[1]} features exceeds limit {max_features}"}
     if labels.isna().any():
         raise ValueError("Missing target labels")
     classes, y = np.unique(np.asarray(labels), return_inverse=True)
@@ -104,14 +116,15 @@ def report_html(payload, metric="log_loss"):
     excluded = [f'<li>{escape(row.get("name", key))} (task {escape(key)}): {escape(row["status"])} — '
                 f'{escape(row["reason"])}</li>' for key, row in payload["tasks"].items() if row["status"] != "ok"]
     settings = escape(json.dumps(payload["settings"], indent=2))
+    benchmark = escape(payload.get("benchmark", "OpenML-CC18"))
     return f"""<!doctype html><html lang="en"><meta charset="utf-8"><title>OpenML model comparison</title>
 <style>body{{font:15px system-ui;background:#f4f6fa;color:#182230;margin:32px}}main{{max-width:1200px;margin:auto}}
 table{{width:100%;border-collapse:collapse;background:white}}th,td{{border:1px solid #ddd;padding:12px;text-align:right}}
 th:first-child{{text-align:left}}thead,tfoot{{background:#e9eef5}}td.best{{background:#dcfce7;font-weight:bold}}
 small{{font-weight:normal;color:#667085}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}</style><main>
-<h1>OpenML-CC18 · {escape(metric)}</h1><p>{len(successful)} tasks evaluated; {len(excluded)} skipped or failed.
+<h1>{benchmark} · {escape(metric)}</h1><p>{len(successful)} tasks evaluated; {len(excluded)} skipped or failed.
 {'Higher' if higher else 'Lower'} scores are better. Green marks the best model in each row (including ties).</p>
-<p>Official repeat-0 folds, subsampled training contexts: this is a small-context adaptation, not the full-data CC18 protocol.
+<p>Official repeat-0 folds, subsampled training contexts: this is a small-context adaptation, not the full benchmark protocol.
 Cells average folds. Summary rows weight each task equally; tied ranks are averaged.
 Positive improvement means better. Relative summaries exclude zero-baseline tasks. Split variation is not training-seed uncertainty.</p>
 <table><thead><tr><th>Dataset</th>{''.join(f'<th>λ = {v}</th>' for v in LAMBDAS)}</tr></thead>
@@ -120,11 +133,13 @@ Positive improvement means better. Relative summaries exclude zero-baseline task
 <details><summary>Protocol and checkpoints</summary><pre>{settings}</pre></details></main></html>"""
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="openml", max_dataset_rows=0, max_features=0):
+    parser = argparse.ArgumentParser(description=f"Evaluate four penalty regimes on {benchmark} with a small-context protocol.")
     parser.add_argument("--checkpoints", nargs=4, default=[f"runs/cosine3000_fg{v}_seed0/latest.pt" for v in LAMBDAS],
                         help="Paths in lambda order: 0, 0.03, 0.1, 0.3")
-    parser.add_argument("--suite", type=int, default=99, help="OpenML-CC18 suite ID")
+    parser.add_argument("--suite", type=int, default=suite_id, help="OpenML suite ID")
+    parser.add_argument("--max-dataset-rows", type=int, default=max_dataset_rows, help="Exclude larger datasets; 0 disables the limit")
+    parser.add_argument("--max-features", type=int, default=max_features, help="Exclude wider datasets; 0 disables the limit")
     parser.add_argument("--context-size", type=int, default=128)
     parser.add_argument("--folds", type=int, nargs="+", help="Default: every official fold of repeat 0")
     parser.add_argument("--seed", type=int, default=0)
@@ -132,8 +147,8 @@ def main(argv=None):
     parser.add_argument("--query-batch-size", type=int, default=128)
     parser.add_argument("--n-estimators", type=int, default=1)
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--output", default="runs/openml_comparison.json")
-    parser.add_argument("--html", default="runs/openml_comparison.html")
+    parser.add_argument("--output", default=f"runs/{output_prefix}_comparison.json")
+    parser.add_argument("--html", default=f"runs/{output_prefix}_comparison.html")
     parser.add_argument("--metric", choices=["log_loss", "accuracy", "brier"], default="log_loss")
     parser.add_argument("--summary", help="Rebuild the HTML from existing JSON without evaluating")
     args = parser.parse_args(argv)
@@ -142,6 +157,8 @@ def main(argv=None):
     else:
         if min(args.context_size, args.query_batch_size, args.n_estimators) < 1 or args.context_size < 2 or args.max_test_rows < 0:
             parser.error("Require context-size >= 2, positive batch/ensemble sizes, and max-test-rows >= 0")
+        if args.max_dataset_rows < 0 or args.max_features < 0:
+            parser.error("Dataset size limits must be nonnegative")
         try:
             import openml
         except ImportError:
@@ -153,7 +170,7 @@ def main(argv=None):
                 parser.error(f"{path} is not a classification checkpoint with lambda_fg={regime}")
             models.append(model)
         suite = openml.study.get_suite(args.suite)
-        payload = {"settings": vars(args), "suite_tasks": list(suite.tasks), "tasks": {}}
+        payload = {"benchmark": benchmark, "settings": vars(args), "suite_tasks": list(suite.tasks), "tasks": {}}
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         for task_id in suite.tasks:

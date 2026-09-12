@@ -133,6 +133,26 @@ Historical results from the original single-target small configuration (not the 
 
 ### Classification and coherence evaluation
 
+For a size-filtered TabArena classification comparison, using the same four checkpoints:
+
+```bash
+python -m nanotabicl.eval_tabarena --device cuda:0
+```
+
+This uses the authors' [TabArena-v0.1 OpenML suite 457](https://arxiv.org/abs/2506.16791),
+excluding regression tasks and datasets above 10,000 rows, 100 input features, or
+the models' class capacity. These are configurable resource limits, not TabArena's
+official small subset: use `--max-dataset-rows 50000 --max-features 200` to expand it.
+Sampling and scoring match `eval_openml`: 128 context rows, all repeat-0 folds,
+up to 1,024 test rows per fold. Thus these results are not official leaderboard scores.
+Open `runs/tabarena_comparison.html` for the four-column model table and aggregate
+ranks/improvements. JSON includes fold scores and explicit skip/failure reasons.
+The existing OpenML dependency is sufficient; no TabArena package is needed.
+
+```bash
+python -m nanotabicl.eval_tabarena --summary runs/tabarena_comparison.json --metric accuracy --html runs/tabarena_accuracy.html
+```
+
 For a broader four-model comparison on [OpenML-CC18](https://docs.openml.org/benchmark/):
 
 ```bash
