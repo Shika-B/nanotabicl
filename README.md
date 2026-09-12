@@ -133,6 +133,33 @@ Historical results from the original single-target small configuration (not the 
 
 ### Classification and coherence evaluation
 
+For a broader four-model comparison on [OpenML-CC18](https://docs.openml.org/benchmark/):
+
+```bash
+python -m pip install openml
+python -m nanotabicl.eval_openml --device cuda:0
+```
+
+This uses the four `runs/cosine3000_fg{0,0.03,0.1,0.3}_seed0/latest.pt` checkpoints.
+Override with `--checkpoints PATH0 PATH003 PATH01 PATH03`. Open
+`runs/openml_comparison.html`: each dataset has four log-loss columns, followed by
+average score/rank, average and median relative improvement, and percentage of tasks
+improved versus lambda zero. Detailed fold metrics are saved incrementally in JSON.
+
+The protocol uses every task in suite 99, all repeat-0 official folds, 128 context
+rows and up to 1,024 test rows per fold, with identical row samples for all models.
+This is a small-context adaptation of CC18. `--max-test-rows 0` uses complete test
+folds; `--folds 0 1 2` offers a shorter pilot. Classes absent from context are assigned
+zero probability and their test frequency is recorded. Over-capacity tasks and failed
+tasks are listed in the report and excluded for all models; features are not capped.
+Summary rows weight tasks equally, not individual test examples. Tied ranks are averaged.
+
+To display accuracy or Brier score without rerunning inference:
+
+```bash
+python -m nanotabicl.eval_openml --summary runs/openml_comparison.json --metric accuracy --html runs/openml_accuracy.html
+```
+
 Compare checkpoints with identical context sizes and split seeds:
 
 ```bash
