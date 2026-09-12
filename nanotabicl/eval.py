@@ -3,6 +3,7 @@ import argparse
 import csv
 import io
 import json
+from html import escape
 from pathlib import Path
 from urllib.request import urlopen
 from zipfile import ZipFile
@@ -189,7 +190,7 @@ def evaluate(model, task: str, max_rows: int = 1024, seed: int = 0, *, include_p
     return scores
 
 
-def comparison_table(payload, control=None, penalized=None):
+def comparison_table(payload, control=None, penalized=None, html=False):
     """Compact mean +/- sample SD of paired split-seed differences (or single-model scores)."""
     results = payload["results"]
     if control is None and penalized is None:
@@ -244,15 +245,56 @@ def comparison_table(payload, control=None, penalized=None):
     introduction = ([f"Control:   {control}", f"Penalized: {penalized}",
                      "Delta = penalized - control; " + ("positive" if regression else "negative") + " is better."]
                     if penalized else [f"Checkpoint: {control}"])
+    if html:
+        cells = []
+        for row in rows:
+            rendered = []
+            for i, value in enumerate(row):
+                style = ""
+                if penalized and i >= (1 if regression else 2) and value != "-":
+                    number = float(value.split()[0])
+                    if number != 0:
+                        better = number > 0 if regression else number < 0
+                        style = ' class="better"' if better else ' class="worse"'
+                rendered.append(f"<td{style}>{escape(value).replace(' +/- ', ' ± ')}</td>")
+            cells.append("<tr>" + "".join(rendered) + "</tr>")
+        return ("<section>" + "".join(f"<p>{escape(text)}</p>" for text in introduction)
+                + f"<p>{len(seeds)} split seeds · Mean ± sample standard deviation, not a confidence interval.</p>"
+                + ("" if regression else "<p>Joint log loss averages both orders. Ordinary datasets use the A column.</p>")
+                + "<div class='scroll'><table><thead><tr>"
+                + "".join(f"<th>{escape(text.replace('Delta ', 'Δ ').replace('LL', 'log loss'))}</th>" for text in header)
+                + "</tr></thead><tbody>" + "".join(cells) + "</tbody></table></div></section>")
     return "\n".join([*introduction, f"{len(seeds)} split seed(s); mean +/- sample SD (not a confidence interval).",
                       *([] if regression else ["Joint LL averages both orders; ordinary benchmarks use LL A."]),
                       "", line(header), "-+-".join("-" * width for width in widths), *map(line, rows)])
 
 
+def write_report(payloads, path, control=None, penalized=None):
+    """Write standalone browser-readable tables; no external scripts or styles required."""
+    sections = [comparison_table(payload, control, penalized, html=True) for payload in payloads]
+    document = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model evaluation comparison</title><style>
+body{font:15px system-ui,sans-serif;color:#182230;background:#f4f6fa;margin:32px}
+main{max-width:1500px;margin:auto}h1{font-size:28px}section{background:white;padding:24px;margin:24px 0;border-radius:12px}
+p{overflow-wrap:anywhere;color:#475467}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:12px 16px;border:1px solid #d0d5dd;text-align:right;white-space:nowrap}
+th{background:#e9eef5}td:first-child,th:first-child{text-align:left}tr:nth-child(even){background:#f9fafb}
+td.better{background:#dcfce7;color:#166534}td.worse{background:#fee2e2;color:#991b1b}.scroll{overflow-x:auto}
+</style><main><h1>Model evaluation comparison</h1>
+<p>Green: lower loss/gap or higher R². Red: the opposite. Colors show direction, not statistical significance.</p>
+""" + "\n".join(sections) + "</main></html>"
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(document, encoding="utf-8")
+    print(f"Table saved to {path.resolve()} — open this HTML file in a browser.")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("checkpoints", nargs="*")
-    parser.add_argument("--summary", help="Summarize an existing JSON without reevaluating")
+    parser.add_argument("--summary", nargs="+", help="Summarize existing JSON files without reevaluating")
+    parser.add_argument("--html", help="HTML table output path")
     parser.add_argument("--control", help="Control checkpoint key; default: first checkpoint")
     parser.add_argument("--penalized", help="Penalized checkpoint key; default: second checkpoint")
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
@@ -267,7 +309,10 @@ def main(argv=None):
         if args.checkpoints:
             parser.error("Use either checkpoints or --summary")
         try:
-            print(comparison_table(json.loads(Path(args.summary).read_text()), args.control, args.penalized))
+            payloads = [json.loads(Path(path).read_text()) for path in args.summary]
+            destination = args.html or (str(Path(args.summary[0]).with_suffix(".html")) if len(args.summary) == 1
+                                        else str(Path(args.summary[0]).parent / "comparison_tables.html"))
+            write_report(payloads, destination, args.control, args.penalized)
         except (ValueError, KeyError) as error:
             parser.error(str(error))
         return
@@ -295,7 +340,8 @@ def main(argv=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2) + "\n")
     try:
-        print(comparison_table(payload, args.control, args.penalized))
+        destination = args.html or (str(Path(args.output).with_suffix(".html")) if args.output else "runs/evaluation.html")
+        write_report([payload], destination, args.control, args.penalized)
     except (ValueError, KeyError) as error:
         parser.error(str(error))
 

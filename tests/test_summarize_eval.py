@@ -44,7 +44,9 @@ def test_eval_cli_prints_only_summary(tmp_path, monkeypatch, capsys):
     path = tmp_path / "results.json"
     main(["control", "penalized", "--output", str(path)])
     output = capsys.readouterr().out
-    assert "-0.2000" in output and "iris/log_loss:" not in output
+    assert "Table saved to" in output and "iris/log_loss:" not in output
+    html = path.with_suffix(".html").read_text()
+    assert "<table>" in html and "-0.2000" in html and 'class="better"' in html
     assert json.loads(path.read_text())["results"]["control"]["0"]["iris/log_loss"] == 1.0
     main(["--summary", str(path)])
     assert capsys.readouterr().out == output

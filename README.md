@@ -140,11 +140,19 @@ python -m nanotabicl.eval runs/fg_control/latest.pt runs/fg_penalized/latest.pt 
   --context-sizes 32 64 128 --seeds 0 1 2 --output runs/fg_comparison.json
 ```
 
-Evaluation prints only the compact summary; detailed metrics remain in the JSON.
+Evaluation creates an HTML table beside the JSON and prints its path. Open the HTML
+file in a browser for formatted tables with green improvements and red regressions.
+Detailed metrics remain in the JSON; use `--html PATH` to choose the report location.
 Summarize an existing results file without rerunning evaluation:
 
 ```bash
 python -m nanotabicl.eval --summary runs/fg_comparison.json
+```
+
+Combine several existing comparisons into one HTML report without reevaluation:
+
+```bash
+python -m nanotabicl.eval --summary runs/comparison_fg0.03.json runs/comparison_fg0.1.json runs/comparison_fg0.3.json --html runs/comparison.html
 ```
 
 The first checkpoint is the control and the second is penalized; override with
