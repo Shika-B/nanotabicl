@@ -140,10 +140,11 @@ python -m nanotabicl.eval runs/fg_control/latest.pt runs/fg_penalized/latest.pt 
   --context-sizes 32 64 128 --seeds 0 1 2 --output runs/fg_comparison.json
 ```
 
+Evaluation prints only the compact summary; detailed metrics remain in the JSON.
 Summarize an existing results file without rerunning evaluation:
 
 ```bash
-python -m nanotabicl.summarize_eval runs/fg_comparison.json
+python -m nanotabicl.eval --summary runs/fg_comparison.json
 ```
 
 The first checkpoint is the control and the second is penalized; override with

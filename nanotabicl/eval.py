@@ -189,9 +189,72 @@ def evaluate(model, task: str, max_rows: int = 1024, seed: int = 0, *, include_p
     return scores
 
 
-if __name__ == "__main__":
+def comparison_table(payload, control=None, penalized=None):
+    """Compact mean +/- sample SD of paired split-seed differences (or single-model scores)."""
+    results = payload["results"]
+    if control is None and penalized is None:
+        if not 1 <= len(results) <= 2:
+            raise ValueError("Specify --control and --penalized to select two checkpoints")
+        control = next(iter(results))
+        penalized = list(results)[1] if len(results) == 2 else None
+    if control not in results or (penalized is not None and (penalized not in results or penalized == control)):
+        raise ValueError("Select valid, distinct checkpoint keys")
+    baseline = results[control]
+    treatment = results[penalized] if penalized is not None else baseline
+    if not baseline or baseline.keys() != treatment.keys():
+        raise ValueError("Both checkpoints must have the same nonempty set of split seeds")
+    seeds = sorted(baseline)
+    keys = set(baseline[seeds[0]])
+    for seed in seeds:
+        if set(baseline[seed]) != keys or set(treatment[seed]) != keys:
+            raise ValueError("Metric keys must match across checkpoints and seeds")
+
+    def entry(metric_keys):
+        values = [np.mean([treatment[seed][key] - (baseline[seed][key] if penalized else 0)
+                           for key in metric_keys]) for seed in seeds]
+        if not np.isfinite(values).all():
+            raise ValueError(f"Nonfinite values for {metric_keys}")
+        mean = f"{np.mean(values):+.4f}" if penalized else f"{np.mean(values):.4f}"
+        return f"{mean} +/- {np.std(values, ddof=1):.4f}" if len(values) > 1 else mean
+
+    rows = []
+    prefixes = [key.removesuffix("/factorization_gap") for key in keys if key.endswith("/factorization_gap")]
+    for prefix in sorted(prefixes, key=lambda p: (p.split("/")[0], int(p.rsplit("_", 1)[1]))):
+        dataset, context = prefix.split("/context_")
+        rows.append([dataset, context, entry([f"{prefix}/a/log_loss"]), entry([f"{prefix}/b/log_loss"]),
+                     entry([f"{prefix}/joint_ab/log_loss", f"{prefix}/joint_ba/log_loss"]),
+                     entry([f"{prefix}/factorization_gap"])])
+    for key in sorted(keys):
+        if key.count("/") == 1 and key.endswith("/log_loss"):
+            rows.append([key.split("/")[0], "50/50", entry([key]), "-", "-", "-"])
+    regression = not rows and keys and all("/" not in key for key in keys)
+    if regression:
+        rows = [[key, entry([key])] for key in sorted(keys)]
+        header = ["Dataset", "Delta R2" if penalized else "R2"]
+    else:
+        prefix = "Delta " if penalized else ""
+        header = ["Dataset", "Context", prefix + "LL A", prefix + "LL B", prefix + "joint LL", prefix + "gap"]
+    if not rows:
+        raise ValueError("No supported evaluation metrics found")
+    widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header))]
+
+    def line(row):
+        return " | ".join(value.ljust(width) for value, width in zip(row, widths))
+
+    introduction = ([f"Control:   {control}", f"Penalized: {penalized}",
+                     "Delta = penalized - control; " + ("positive" if regression else "negative") + " is better."]
+                    if penalized else [f"Checkpoint: {control}"])
+    return "\n".join([*introduction, f"{len(seeds)} split seed(s); mean +/- sample SD (not a confidence interval).",
+                      *([] if regression else ["Joint LL averages both orders; ordinary benchmarks use LL A."]),
+                      "", line(header), "-+-".join("-" * width for width in widths), *map(line, rows)])
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("checkpoints", nargs="+")
+    parser.add_argument("checkpoints", nargs="*")
+    parser.add_argument("--summary", help="Summarize an existing JSON without reevaluating")
+    parser.add_argument("--control", help="Control checkpoint key; default: first checkpoint")
+    parser.add_argument("--penalized", help="Penalized checkpoint key; default: second checkpoint")
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
     parser.add_argument("--context-sizes", nargs="+", type=int, default=[64])
     parser.add_argument("--max-rows", type=int, default=1024)
@@ -199,7 +262,24 @@ if __name__ == "__main__":
     parser.add_argument("--cache-dir", default="runs/eval_data")
     parser.add_argument("--skip-pairs", action="store_true")
     parser.add_argument("--output", help="Optional JSON results file")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.summary:
+        if args.checkpoints:
+            parser.error("Use either checkpoints or --summary")
+        try:
+            print(comparison_table(json.loads(Path(args.summary).read_text()), args.control, args.penalized))
+        except (ValueError, KeyError) as error:
+            parser.error(str(error))
+        return
+    if not args.checkpoints:
+        parser.error("Provide checkpoints or --summary JSON_FILE")
+    if (args.control is None) != (args.penalized is None):
+        parser.error("Supply both --control and --penalized")
+    if len(args.checkpoints) > 2 and args.control is None:
+        parser.error("Select --control and --penalized when evaluating more than two checkpoints")
+    if args.control is not None and (args.control not in args.checkpoints or args.penalized not in args.checkpoints
+                                     or args.control == args.penalized):
+        parser.error("Select two distinct checkpoints present in the arguments")
     results = {}
     for checkpoint in args.checkpoints:
         model, cfg = load_model(checkpoint)
@@ -209,9 +289,16 @@ if __name__ == "__main__":
                               context_sizes=args.context_sizes, cache_dir=args.cache_dir,
                               n_estimators=args.n_estimators)
             results[checkpoint][str(seed)] = scores
-            for name, score in scores.items():
-                print(f"{checkpoint} seed={seed} {name}: {score:.6g}")
+    payload = {"settings": vars(args), "results": results}
     if args.output:
         path = Path(args.output)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"settings": vars(args), "results": results}, indent=2) + "\n")
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+    try:
+        print(comparison_table(payload, args.control, args.penalized))
+    except (ValueError, KeyError) as error:
+        parser.error(str(error))
+
+
+if __name__ == "__main__":
+    main()
