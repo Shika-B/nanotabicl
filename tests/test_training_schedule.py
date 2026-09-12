@@ -34,31 +34,33 @@ def test_fixed_validation_rng_and_reload(tmp_path):
         validation_tables(cfg)
 
 
-def test_warmup_independent_of_budget():
+def test_warmup_and_cosine_endpoints():
     cfg = load_config().optim
     cfg.warmup_steps = 10
     assert lr_schedule(0, cfg) == pytest.approx(cfg.lr / 10)
     assert lr_schedule(9, cfg) == cfg.lr
-    assert lr_schedule(100, cfg, 1e-4) == 1e-4
-    cfg.max_steps = 200
-    assert lr_schedule(100, cfg, 1e-4) == 1e-4
+    cfg.max_steps = 110
+    assert lr_schedule(59, cfg) == pytest.approx((cfg.lr + cfg.min_lr) / 2)
+    assert lr_schedule(109, cfg) == cfg.min_lr
+    assert all(lr_schedule(i, cfg) >= lr_schedule(i + 1, cfg) for i in range(9, 109))
 
 
-def test_plateau_reduces_lr_stops_and_resumes(tmp_path, monkeypatch):
+def test_validation_does_not_stop_training_or_select_checkpoint(tmp_path, monkeypatch):
     module = importlib.import_module("nanotabicl.train")
     monkeypatch.setattr(module, "validate", lambda *args: {"loss": 1.0})
-    cfg = load_config([], TINY + [f"out_dir={tmp_path}", "optim.max_steps=20", "optim.accum_steps=1",
-                                  "optim.lr=0.001", "optim.min_lr=0.0005", "optim.lr_factor=0.5",
-                                  "optim.warmup_steps=0", "validation.every=1", "validation.patience=1",
+    cfg = load_config([], TINY + [f"out_dir={tmp_path}", "optim.max_steps=4", "optim.accum_steps=1",
+                                  "optim.lr=0.001", "optim.min_lr=0.0005",
+                                  "optim.warmup_steps=0", "validation.every=1",
                                   "validation.n_tables=2"])
     train(cfg)
     latest = torch.load(tmp_path / "latest.pt")
-    assert latest["step"] == 3 and latest["convergence"]["stopped"]
+    assert latest["step"] == 4 and "convergence" not in latest
     assert latest["optimizer"]["param_groups"][0]["lr"] == 0.0005
-    assert torch.load(tmp_path / "best.pt")["step"] == 1
+    assert not (tmp_path / "best.pt").exists()
+    cfg.optim.max_steps = 5
     model = train(cfg)
-    assert torch.load(tmp_path / "latest.pt")["step"] == 3
-    for name, value in torch.load(tmp_path / "best.pt")["model"].items():
+    assert torch.load(tmp_path / "latest.pt")["step"] == 5
+    for name, value in torch.load(tmp_path / "latest.pt")["model"].items():
         torch.testing.assert_close(model.state_dict()[name], value)
 
 

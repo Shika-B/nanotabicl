@@ -1,4 +1,4 @@
-"""Float32 training with fixed validation tables, plateau LR reductions and early stopping."""
+"""Float32 training with warmup + cosine decay and fixed validation tables for logging."""
 import json
 import math
 import os
@@ -152,11 +152,12 @@ def loss_fn(model: NanoTabICLv2, x: torch.Tensor, y: torch.Tensor, n_train: int,
     return ce + lambda_fg * gap, metrics
 
 
-def lr_schedule(step: int, cfg: OptimConfig, plateau_lr: float | None = None) -> float:
-    """Fixed-length warmup, then hold the validation-controlled learning rate."""
+def lr_schedule(step: int, cfg: OptimConfig) -> float:
+    """Zero-based update index: warm up to lr, then cosine-decay to min_lr on the last update."""
     if step < cfg.warmup_steps:
         return cfg.lr * (step + 1) / cfg.warmup_steps
-    return cfg.lr if plateau_lr is None else plateau_lr
+    progress = min(1.0, (step - cfg.warmup_steps + 1) / max(1, cfg.max_steps - cfg.warmup_steps))
+    return cfg.min_lr + 0.5 * (cfg.lr - cfg.min_lr) * (1 + math.cos(math.pi * progress))
 
 
 def validation_tables(cfg: Config):
@@ -200,23 +201,6 @@ def validate(model, tables, task, device):
     return totals
 
 
-def update_convergence(state, value, cfg):
-    """Reduce LR after patience checks; stop after another plateau at min_lr."""
-    improved = value < state["best"]
-    state["best"] = min(value, state["best"])
-    if value < state["reference"] - cfg.validation.min_delta:
-        state["reference"], state["bad_checks"] = value, 0
-    else:
-        state["bad_checks"] += 1
-    if state["bad_checks"] >= cfg.validation.patience:
-        if state["lr"] <= cfg.optim.min_lr:
-            state["stopped"] = True
-        else:
-            state["lr"] = max(cfg.optim.min_lr, state["lr"] * cfg.optim.lr_factor)
-            state["bad_checks"] = 0
-    return improved
-
-
 def train(cfg: Config) -> NanoTabICLv2:
     if cfg.data.n_targets not in (1, 2) or (cfg.data.n_targets == 2 and cfg.data.task != "classification"):
         raise ValueError("Training supports one target, or two classification targets")
@@ -224,13 +208,13 @@ def train(cfg: Config) -> NanoTabICLv2:
         raise ValueError("lambda_fg must be finite and nonnegative")
     if cfg.optim.lambda_fg != 0 and cfg.data.n_targets != 2:
         raise ValueError("lambda_fg requires two classification targets")
-    if min(cfg.validation.n_tables, cfg.validation.every, cfg.validation.patience, cfg.optim.max_steps,
+    if min(cfg.validation.n_tables, cfg.validation.every, cfg.optim.max_steps,
            cfg.optim.accum_steps, cfg.save_every, cfg.log_every) < 1:
-        raise ValueError("Table counts, patience, step limits and intervals must be positive")
-    if not (0 < cfg.optim.min_lr <= cfg.optim.lr and 0 < cfg.optim.lr_factor < 1):
-        raise ValueError("Require 0 < min_lr <= lr and 0 < lr_factor < 1")
-    if cfg.optim.warmup_steps < 0 or not (0 <= cfg.validation.min_delta < float("inf")):
-        raise ValueError("warmup_steps and finite min_delta must be nonnegative")
+        raise ValueError("Table counts, step limits and intervals must be positive")
+    if not (0 < cfg.optim.min_lr <= cfg.optim.lr < float("inf")):
+        raise ValueError("Require finite 0 < min_lr <= lr")
+    if not 0 <= cfg.optim.warmup_steps < cfg.optim.max_steps:
+        raise ValueError("Require 0 <= warmup_steps < max_steps")
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
     device = resolve_device(cfg.device)
@@ -241,8 +225,6 @@ def train(cfg: Config) -> NanoTabICLv2:
     optimizer = Muon(model.parameters(), lr=cfg.optim.lr, weight_decay=cfg.optim.weight_decay,
                      momentum=cfg.optim.momentum, matched_adamw_rms=cfg.optim.matched_adamw_rms)
     step = 0
-    convergence = {"best": float("inf"), "reference": float("inf"), "bad_checks": 0,
-                   "lr": cfg.optim.lr, "stopped": False}
 
     ckpt_path = os.path.join(cfg.out_dir, "latest.pt")
     if os.path.exists(ckpt_path):
@@ -250,7 +232,6 @@ def train(cfg: Config) -> NanoTabICLv2:
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         step = ckpt["step"]
-        convergence.update(ckpt.get("convergence", {}))
         print(f"Resuming from {ckpt_path} at step {step}")
     elif cfg.init_from:  # start a new run (e.g. the next curriculum stage) from the weights of another checkpoint
         model.load_state_dict(torch.load(cfg.init_from, map_location=device)["model"])
@@ -267,10 +248,9 @@ def train(cfg: Config) -> NanoTabICLv2:
         wandb.init(project=cfg.wandb_project, config=asdict(cfg), dir=cfg.out_dir, resume="allow")
 
     model.train()
-    best_path = os.path.join(cfg.out_dir, "best.pt")
-    while step < cfg.optim.max_steps and not convergence["stopped"]:
+    while step < cfg.optim.max_steps:
         t_start, t_data, metrics = time.time(), 0.0, {}
-        lr = optimizer.param_groups[0]["lr"] = lr_schedule(step, cfg.optim, convergence["lr"])
+        lr = optimizer.param_groups[0]["lr"] = lr_schedule(step, cfg.optim)
         for _ in range(cfg.optim.accum_steps):
             t0 = time.time()
             x, y, n_train = next(loader)
@@ -287,25 +267,16 @@ def train(cfg: Config) -> NanoTabICLv2:
         step += 1
 
         checked = step % cfg.validation.every == 0 or step == cfg.optim.max_steps
-        improved = False
         if checked:
             validation = validate(model, tables, cfg.data.task, device)
-            if step >= cfg.optim.warmup_steps:
-                improved = update_convergence(convergence, validation["loss"], cfg)
-            else:  # keep the best warmup checkpoint without consuming plateau patience
-                improved = validation["loss"] < convergence["best"]
-                convergence["best"] = min(convergence["best"], validation["loss"])
-            record = {"step": step, "lr": lr, "next_lr": convergence["lr"],
-                      "best_loss": convergence["best"], "bad_checks": convergence["bad_checks"],
-                      "stopped": convergence["stopped"], **validation}
+            record = {"step": step, "lr": lr, **validation}
             with open(os.path.join(cfg.out_dir, "validation.jsonl"), "a") as f:
                 f.write(json.dumps(record) + "\n")
-            print(f"validation step={step} loss={validation['loss']:.6g} best={convergence['best']:.6g} "
-                  f"bad_checks={convergence['bad_checks']} next_lr={convergence['lr']:.4g}", flush=True)
+            print(f"validation step={step} loss={validation['loss']:.6g} lr={lr:.4g}", flush=True)
             if cfg.wandb_project:
                 wandb.log({"step": step, **{f"val/{k}": v for k, v in record.items() if k != "step"}})
 
-        if step % cfg.log_every == 0 or step == cfg.optim.max_steps or convergence["stopped"]:
+        if step % cfg.log_every == 0 or step == cfg.optim.max_steps:
             metrics = {name: value.item() for name, value in metrics.items()}
             metrics.update(step=step, lr=lr, grad_norm=grad_norm.item(),
                            step_time=time.time() - t_start, data_wait=t_data)
@@ -316,16 +287,11 @@ def train(cfg: Config) -> NanoTabICLv2:
                 wandb.log(metrics, step=step)
         if checked or step % cfg.save_every == 0:
             checkpoint = {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step,
-                          "config": asdict(cfg), "convergence": convergence}
+                          "config": asdict(cfg)}
             if os.path.exists(ckpt_path):
                 os.replace(ckpt_path, os.path.join(cfg.out_dir, "previous.pt"))
             torch.save(checkpoint, ckpt_path)
-            if improved:
-                torch.save(checkpoint, best_path)
-    reason = "validation plateau at minimum learning rate" if convergence["stopped"] else "max_steps safety budget"
-    print(f"Stopped: {reason}; best validation loss={convergence['best']:.6g}", flush=True)
-    if os.path.exists(best_path):
-        model.load_state_dict(torch.load(best_path, map_location=device)["model"])
+    print(f"Finished fixed training budget: {step} steps", flush=True)
     return model
 
 

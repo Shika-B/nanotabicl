@@ -17,6 +17,11 @@ def load_model(path: str, device: str = "auto") -> tuple[torch.nn.Module, Config
     ckpt = torch.load(path, map_location=device)
     config = {**ckpt["config"], "optim": dict(ckpt["config"].get("optim", {}))}
     config["optim"].pop("amp_dtype", None)  # compatibility with older checkpoints
+    config["optim"].pop("lr_factor", None)
+    if "validation" in config:
+        config["validation"] = dict(config["validation"])
+        for key in ("patience", "min_delta"):
+            config["validation"].pop(key, None)
     cfg = to_config(config)
     model = build_model(cfg).to(device)
     model.load_state_dict(ckpt["model"])

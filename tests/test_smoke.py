@@ -24,7 +24,7 @@ def test_train_resume_eval(tmp_path, task, n_targets, lambda_fg):
                                  f"data.n_targets={n_targets}", f"optim.lambda_fg={lambda_fg}"])
     train(cfg)
     assert (tmp_path / "latest.pt").exists()
-    assert (tmp_path / "best.pt").exists() and (tmp_path / "validation.pt").exists()
+    assert (tmp_path / "validation.pt").exists()
     cfg.optim.max_steps = 3
     model = train(cfg)  # resumes from latest.pt and trains one more step
     checkpoint = torch.load(tmp_path / "latest.pt", weights_only=False)
@@ -109,6 +109,8 @@ def test_load_legacy_precision_checkpoint(tmp_path):
     cfg = load_config([], TINY)
     config = asdict(cfg)
     config["optim"]["amp_dtype"] = "float32"  # retired field in existing checkpoints
+    config["optim"]["lr_factor"] = 0.3
+    config["validation"].update(patience=3, min_delta=0.001)
     path = tmp_path / "legacy.pt"
     torch.save({"config": config, "model": build_model(cfg).state_dict()}, path)
     model, loaded_cfg = load_model(str(path), device="cpu")

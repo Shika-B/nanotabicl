@@ -52,7 +52,6 @@ class OptimConfig:
     warmup_frac: float = 0.01  # legacy config field; scheduler now uses warmup_steps
     warmup_steps: int = 100
     min_lr: float = 1e-5
-    lr_factor: float = 0.3
     grad_clip: float = 10.0
 
 
@@ -61,8 +60,6 @@ class ValidationConfig:
     n_tables: int = 128
     seed: int = 1729  # independent of training seed
     every: int = 100
-    patience: int = 5  # consecutive checks without significant improvement
-    min_delta: float = 1e-3  # absolute decrease in mean per-table validation loss
 
 
 @dataclass

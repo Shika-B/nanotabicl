@@ -54,7 +54,7 @@ random feature/class orders:
 ```python
 from nanotabicl import NanoTabICLClassifier, NanoTabICLRegressor
 
-clf = NanoTabICLClassifier(model="runs/small_convergence/best.pt", n_estimators=8).fit(X_train, y_train)
+clf = NanoTabICLClassifier(model="runs/small_cosine_3000/latest.pt", n_estimators=8).fit(X_train, y_train)
 proba = clf.predict_proba(X_test)
 
 reg = NanoTabICLRegressor(model="runs/regression/latest.pt").fit(X_train, y_train)
@@ -105,29 +105,24 @@ To run and evaluate the default small configuration:
 
 ```bash
 python -m nanotabicl.train configs/small.yaml
-python -m nanotabicl.eval runs/small_convergence/best.pt
+python -m nanotabicl.eval runs/small_cosine_3000/latest.pt
 ```
 
 Training now uses 128 fixed validation tables (seed 1729), generated from the same
 prior as training and persisted in `validation.pt`. Generation preserves the training
 random streams. Every 100 steps, validation measures the equal-weight mean loss across
 tables, using held-out rows and averaging the four CEs for two-target classification.
-The penalty is excluded from the selection criterion. Per-view results go to
+The penalty is excluded from validation loss. Per-view results go to
 `validation.jsonl`.
 
-The small run starts at LR 0.001 with 100 warmup steps, independent of its safety
-budget. Five checks without an absolute improvement greater than 0.001 reduce LR
-by 0.3, down to 0.00001. Five stalled checks at that minimum stop training. These
-thresholds are configurable under `validation` and `optim`; they define an empirical
-plateau, not a guarantee of an optimal model. `optim.max_steps=20000` is a safety cap,
-and reaching it is reported separately from convergence. `optim.warmup_frac` is a
-legacy config field and is no longer used.
+The small run lasts exactly 3,000 optimizer steps: 100 steps of linear warmup to
+LR 0.003, followed by cosine decay to 0.00001 on the final update. Validation is
+for logging only: it never changes the LR, stops training, or selects a checkpoint.
+`optim.warmup_frac` is a legacy config field and is no longer used.
 
-`best.pt` contains the lowest validation loss checkpoint; `latest.pt` contains the
-last training state and convergence counters for resuming. Training returns the best
-model. Start in a fresh directory for this new recipe. Once a baseline recipe is
-established, freeze its schedule/budget for a controlled penalty comparison: separately
-adapting each run's stopping time also changes the training budget.
+`latest.pt` contains the last training state for resuming; training returns that
+final model. No `best.pt` is created. Start in a fresh directory for this recipe
+and compare final checkpoints using identical schedules and budgets.
 Historical results from the original single-target small configuration (not the new two-target setup):
 | Dataset | Score |
 |---|---:|

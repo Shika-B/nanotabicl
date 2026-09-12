@@ -18,19 +18,16 @@ data:
   num_workers: 4
 optim:
   lambda_fg: 0.0
-  max_steps: 20000  # safety budget; normally stop on validation convergence
+  max_steps: 3000
   accum_steps: 4
-  lr: 1.0e-3
+  lr: 3.0e-3
   warmup_steps: 100
   min_lr: 1.0e-5
-  lr_factor: 0.3
 validation:
   n_tables: 128
   seed: 1729
   every: 100
-  patience: 3
-  min_delta: 0.001
 seed: 0
-out_dir: runs/small_convergence
+out_dir: runs/small_cosine_3000
 log_every: 50
 save_every: 100
