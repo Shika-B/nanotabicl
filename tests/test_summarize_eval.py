@@ -12,6 +12,7 @@ def test_paired_differences_and_order():
     }}
     text = comparison_table(payload)
     assert "-0.7500 +/- 0.3536" in text
+    assert "+37.50%" in text  # ratio of means, not mean of per-seed percentages
     assert "Control:   control" in text and "car" in text
     assert "+0.7500 +/- 0.3536" in comparison_table(payload, "penalized", "control")
     del payload["results"]["penalized"]["1"]
@@ -47,6 +48,15 @@ def test_eval_cli_prints_only_summary(tmp_path, monkeypatch, capsys):
     assert "Table saved to" in output and "iris/log_loss:" not in output
     html = path.with_suffix(".html").read_text()
     assert "<table>" in html and "-0.2000" in html and 'class="better"' in html
+    assert '<td class="better">+20.00%</td>' in html
     assert json.loads(path.read_text())["results"]["control"]["0"]["iris/log_loss"] == 1.0
     main(["--summary", str(path)])
     assert capsys.readouterr().out == output
+
+
+def test_percentage_zero_baseline_and_regression_direction():
+    payload = {"results": {"control": {"0": {"iris/log_loss": 0.0}},
+                           "penalized": {"0": {"iris/log_loss": 0.1}}}}
+    assert "N/A" in comparison_table(payload, html=True)
+    payload["results"]["control"]["0"]["iris/log_loss"] = 0.05
+    assert '<td class="worse">-100.00%</td>' in comparison_table(payload, html=True)

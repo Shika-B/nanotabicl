@@ -218,23 +218,33 @@ def comparison_table(payload, control=None, penalized=None, html=False):
         mean = f"{np.mean(values):+.4f}" if penalized else f"{np.mean(values):.4f}"
         return f"{mean} +/- {np.std(values, ddof=1):.4f}" if len(values) > 1 else mean
 
+    def improvement(metric_keys):
+        base = np.mean([baseline[seed][key] for seed in seeds for key in metric_keys])
+        treated = np.mean([treatment[seed][key] for seed in seeds for key in metric_keys])
+        if not np.isfinite([base, treated]).all():
+            raise ValueError(f"Nonfinite values for {metric_keys}")
+        return f"{100 * (base - treated) / base:+.2f}%" if base > 0 else "N/A"
+
     rows = []
     prefixes = [key.removesuffix("/factorization_gap") for key in keys if key.endswith("/factorization_gap")]
     for prefix in sorted(prefixes, key=lambda p: (p.split("/")[0], int(p.rsplit("_", 1)[1]))):
         dataset, context = prefix.split("/context_")
-        rows.append([dataset, context, entry([f"{prefix}/a/log_loss"]), entry([f"{prefix}/b/log_loss"]),
+        percentage = [improvement([f"{prefix}/joint_ab/log_loss", f"{prefix}/joint_ba/log_loss"])] if penalized else []
+        rows.append([dataset, context, *percentage, entry([f"{prefix}/a/log_loss"]), entry([f"{prefix}/b/log_loss"]),
                      entry([f"{prefix}/joint_ab/log_loss", f"{prefix}/joint_ba/log_loss"]),
                      entry([f"{prefix}/factorization_gap"])])
     for key in sorted(keys):
         if key.count("/") == 1 and key.endswith("/log_loss"):
-            rows.append([key.split("/")[0], "50/50", entry([key]), "-", "-", "-"])
+            percentage = [improvement([key])] if penalized else []
+            rows.append([key.split("/")[0], "50/50", *percentage, entry([key]), "-", "-", "-"])
     regression = not rows and keys and all("/" not in key for key in keys)
     if regression:
         rows = [[key, entry([key])] for key in sorted(keys)]
         header = ["Dataset", "Delta R2" if penalized else "R2"]
     else:
         prefix = "Delta " if penalized else ""
-        header = ["Dataset", "Context", prefix + "LL A", prefix + "LL B", prefix + "joint LL", prefix + "gap"]
+        header = ["Dataset", "Context", *(["Loss improvement %"] if penalized else []),
+                  prefix + "LL A", prefix + "LL B", prefix + "joint LL", prefix + "gap"]
     if not rows:
         raise ValueError("No supported evaluation metrics found")
     widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header))]
@@ -245,16 +255,20 @@ def comparison_table(payload, control=None, penalized=None, html=False):
     introduction = ([f"Control:   {control}", f"Penalized: {penalized}",
                      "Delta = penalized - control; " + ("positive" if regression else "negative") + " is better."]
                     if penalized else [f"Checkpoint: {control}"])
+    if penalized and not regression:
+        introduction.append("Loss improvement % = 100 × (mean control loss − mean penalized loss) / mean control loss; "
+                            "positive is better. Uses joint loss for paired tasks, ordinary loss otherwise. "
+                            "This is a ratio of seed means; N/A means a zero baseline.")
     if html:
         cells = []
         for row in rows:
             rendered = []
             for i, value in enumerate(row):
                 style = ""
-                if penalized and i >= (1 if regression else 2) and value != "-":
-                    number = float(value.split()[0])
+                if penalized and i >= (1 if regression else 2) and value not in ("-", "N/A"):
+                    number = float(value.split()[0].rstrip("%"))
                     if number != 0:
-                        better = number > 0 if regression else number < 0
+                        better = number > 0 if regression or i == 2 else number < 0
                         style = ' class="better"' if better else ' class="worse"'
                 rendered.append(f"<td{style}>{escape(value).replace(' +/- ', ' ± ')}</td>")
             cells.append("<tr>" + "".join(rendered) + "</tr>")
