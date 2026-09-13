@@ -6,7 +6,7 @@ class counts. These are our resource limits, not TabArena's official 'small'
 subset. Uses all repeat-0 folds, 128 context rows, and <=1,024 queries per fold.
 This is a small-context adaptation, not the official TabArena leaderboard protocol.
 Preprocessing, paired sampling, metrics and reporting are shared with eval_openml.
-Evaluates training seeds 0, 1, 3 for penalties 0 and 0.5, with evaluation seed 0.
+Evaluates training seeds 0, 1, 2 for penalties 0 and 0.5, with evaluation seed 0.
 Writes only aggregate HTML to seeded_tabarena.html; per-seed JSON retains raw data.
 Full TabICLv2 scores are read from tabarena_tabicl_comparison.html.
 """
@@ -169,7 +169,7 @@ Saved TabICLv2 HTML scores are rounded to six decimals and contain no sampling m
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Compare training seeds; additional evaluation flags are passed to the benchmark runner.")
-    parser.add_argument("--training-seeds", nargs="+", type=int, default=[0, 1, 3])
+    parser.add_argument("--training-seeds", nargs="+", type=int, default=[0, 1, 2])
     parser.add_argument("--lambdas", nargs="+", default=["0", "0.5"])
     parser.add_argument("--checkpoint-template", default="runs/cosine3000_fg{lambda}_seed{seed}/latest.pt")
     parser.add_argument("--tabicl-html", default="tabarena_tabicl_comparison.html")

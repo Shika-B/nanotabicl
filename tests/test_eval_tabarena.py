@@ -20,7 +20,7 @@ def test_tabarena_defaults(monkeypatch, tmp_path):
     args, settings = calls[0]
     assert args[0][:2] == ["--device", "cpu"]
     assert len(calls) == 3
-    assert "runs/cosine3000_fg0.5_seed3/latest.pt" in calls[2][0][0]
+    assert "runs/cosine3000_fg0.5_seed2/latest.pt" in calls[2][0][0]
     assert settings["suite_id"] == 457
     assert settings["max_dataset_rows"] == 100000 and settings["max_features"] == 20
 
