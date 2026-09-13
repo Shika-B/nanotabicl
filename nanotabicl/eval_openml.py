@@ -1,4 +1,4 @@
-"""Evaluate four penalty regimes on OpenML-CC18 with a small-context protocol."""
+"""Evaluate penalty regimes on OpenML-CC18 with small contexts."""
 import argparse
 from html import escape
 import json
@@ -76,7 +76,7 @@ def evaluate_task(task, models, args):
             raise ValueError("Insufficient context or query rows")
         x_train, x_test = prepare_features(frame, categorical, context, query)
         scores = {}
-        for regime, model in zip(LAMBDAS, models):
+        for regime, model in zip(getattr(args, "lambdas", LAMBDAS), models):
             clf = NanoTabICLClassifier(model=model, device=args.device, n_estimators=args.n_estimators,
                                       random_state=args.seed).fit(x_train, y[context])
             proba = np.concatenate([aligned_probabilities(clf, x_test[start:start + args.query_batch_size], len(classes))
@@ -88,16 +88,19 @@ def evaluate_task(task, models, args):
                         "unseen_label_rate": float(np.mean(~np.isin(y[query], y[context]))), "scores": scores})
     return {"name": dataset.name, "status": "ok", "n_classes": len(classes), "folds": records,
             "scores": {regime: {metric: float(np.mean([r["scores"][regime][metric] for r in records]))
-                                for metric in ("log_loss", "accuracy", "brier")} for regime in LAMBDAS}}
+                                for metric in ("log_loss", "accuracy", "brier")} for regime in records[0]["scores"]}}
 
 
 def report_html(payload, metric="log_loss"):
     """Dataset-weighted summaries on the common successfully evaluated task set."""
     successful = [(key, row) for key, row in payload["tasks"].items() if row["status"] == "ok"]
+    regimes = payload.get("model_keys", list(LAMBDAS))
+    if any(set(row["scores"]) != set(regimes) for _, row in successful):
+        raise ValueError("All successful tasks must contain the same models for comparable summaries")
     higher = metric == "accuracy"
     body, summaries = [], []
     if successful:
-        values = np.array([[row["scores"][regime][metric] for regime in LAMBDAS] for _, row in successful])
+        values = np.array([[row["scores"][regime][metric] for regime in regimes] for _, row in successful])
         ranks = rankdata(-values if higher else values, axis=1, method="average")
         for (task_id, row), scores, rank in zip(successful, values, ranks):
             cells = "".join(f'<td class="{"best" if r == rank.min() else ""}">{score:.4f}</td>'
@@ -108,8 +111,8 @@ def report_html(payload, metric="log_loss"):
         relative = 100 * change[valid] / values[valid, :1]
         stats = [("Average score", values.mean(axis=0)), ("Average rank (lower is better)", ranks.mean(axis=0)),
                  ("Average improvement vs λ=0 (score units)", change.mean(axis=0)),
-                 ("Average relative improvement (%)", relative.mean(axis=0) if valid.any() else [np.nan] * 4),
-                 ("Median relative improvement (%)", np.median(relative, axis=0) if valid.any() else [np.nan] * 4),
+                 ("Average relative improvement (%)", relative.mean(axis=0) if valid.any() else [np.nan] * len(regimes)),
+                 ("Median relative improvement (%)", np.median(relative, axis=0) if valid.any() else [np.nan] * len(regimes)),
                  ("Datasets strictly improved vs λ=0 (%)", 100 * (change > 0).mean(axis=0))]
         for label, scores in stats:
             summaries.append(f"<tr><th>{label}</th>" + "".join(
@@ -128,16 +131,18 @@ small{{font-weight:normal;color:#667085}}pre{{white-space:pre-wrap;overflow-wrap
 <p>Official repeat-0 folds, subsampled training contexts: this is a small-context adaptation, not the full benchmark protocol.
 Cells average folds. Summary rows weight each task equally; tied ranks are averaged.
 Positive improvement means better. Relative summaries exclude zero-baseline tasks. Split variation is not training-seed uncertainty.</p>
-<table><thead><tr><th>Dataset</th>{''.join(f'<th>λ = {v}</th>' for v in LAMBDAS)}</tr></thead>
+<table><thead><tr><th>Dataset</th>{''.join(f'<th>{escape(v if v == "TabICLv2" else "λ = " + v)}</th>' for v in regimes)}</tr></thead>
 <tbody>{''.join(body)}</tbody><tfoot>{''.join(summaries)}</tfoot></table>
 <h2>Skipped / failed tasks</h2><ul>{''.join(excluded)}</ul>
 <details><summary>Protocol and checkpoints</summary><pre>{settings}</pre></details></main></html>"""
 
 
 def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="openml", max_dataset_rows=0, max_features=0):
-    parser = argparse.ArgumentParser(description=f"Evaluate four penalty regimes on {benchmark} with a small-context protocol.")
-    parser.add_argument("--checkpoints", nargs=4, default=[f"runs/cosine3000_fg{v}_seed0/latest.pt" for v in LAMBDAS],
-                        help="Paths in lambda order: 0, 0.03, 0.1, 0.3")
+    parser = argparse.ArgumentParser(description=f"Evaluate penalty regimes on {benchmark} with a small-context protocol.")
+    parser.add_argument("--lambdas", nargs="+", default=list(LAMBDAS),
+                        help="Penalty values in checkpoint order; first must be 0 (baseline)")
+    parser.add_argument("--checkpoints", nargs="+",
+                        help="Paths in --lambdas order; default: runs/cosine3000_fg{lambda}_seed0/latest.pt")
     parser.add_argument("--suite", type=int, default=suite_id, help="OpenML suite ID")
     parser.add_argument("--max-dataset-rows", type=int, default=max_dataset_rows, help="Exclude larger datasets; 0 disables the limit")
     parser.add_argument("--max-features", type=int, default=max_features, help="Exclude wider datasets; 0 disables the limit")
@@ -156,6 +161,16 @@ def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="open
     if args.summary:
         payload = json.loads(Path(args.summary).read_text())
     else:
+        try:
+            values = [float(v) for v in args.lambdas]
+        except ValueError:
+            parser.error("--lambdas must be numeric")
+        if values[0] != 0 or any(not np.isfinite(v) or v < 0 for v in values) or len(set(values)) != len(values):
+            parser.error("--lambdas must be distinct, finite, nonnegative, and start with 0")
+        if args.checkpoints is None:
+            args.checkpoints = [f"runs/cosine3000_fg{v}_seed0/latest.pt" for v in args.lambdas]
+        if len(args.checkpoints) != len(args.lambdas):
+            parser.error("Provide one checkpoint per lambda")
         if min(args.context_size, args.query_batch_size, args.n_estimators) < 1 or args.context_size < 2 or args.max_test_rows < 0:
             parser.error("Require context-size >= 2, positive batch/ensemble sizes, and max-test-rows >= 0")
         if args.max_dataset_rows < 0 or args.max_features < 0:
@@ -165,13 +180,15 @@ def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="open
         except ImportError:
             parser.error("Install the optional dependency: python -m pip install openml")
         models = []
-        for regime, path in zip(LAMBDAS, args.checkpoints):
+        for regime, path in zip(args.lambdas, args.checkpoints):
             model, cfg = load_model(path, args.device)
             if cfg.data.task != "classification" or not np.isclose(cfg.optim.lambda_fg, float(regime)):
                 parser.error(f"{path} is not a classification checkpoint with lambda_fg={regime}")
             models.append(model)
+
         suite = openml.study.get_suite(args.suite)
-        payload = {"benchmark": benchmark, "settings": vars(args), "suite_tasks": list(suite.tasks), "tasks": {}}
+        payload = {"benchmark": benchmark, "settings": vars(args), "suite_tasks": list(suite.tasks), "tasks": {},
+                   "model_keys": args.lambdas}
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
         for task_id in suite.tasks:

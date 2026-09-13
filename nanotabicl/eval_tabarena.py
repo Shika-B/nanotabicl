@@ -1,4 +1,4 @@
-"""Four-model comparison on small TabArena-v0.1 classification datasets.
+"""Compare nano models on small TabArena classification datasets.
 
 Uses the authors' OpenML suite 457 (https://arxiv.org/abs/2506.16791).
 Defaults: <=10,000 dataset rows, <=100 input features, and model-supported

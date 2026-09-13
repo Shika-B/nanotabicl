@@ -133,6 +133,20 @@ Historical results from the original single-target small configuration (not the 
 
 ### Classification and coherence evaluation
 
+`eval_openml` and `eval_tabarena` evaluate the four nano models without the official
+`tabicl` package. To evaluate pretrained TabICLv2 separately on CPU, copy
+`eval_tabicl_cpu.py` and your comparison JSON into a separate environment:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install tabicl==2.2.0 openml
+python eval_tabicl_cpu.py tabarena_comparison.json --output tabicl_tabarena.json
+```
+
+The standalone script replays successful tasks with the saved sampling settings,
+and writes an HTML table alongside its JSON. It uses float32 and temperature 1.0;
+TabICLv2's internal preprocessing remains its official pipeline.
+
 For a size-filtered TabArena classification comparison, using the same four checkpoints:
 
 ```bash
