@@ -137,7 +137,8 @@ Positive improvement means better. Relative summaries exclude zero-baseline task
 <details><summary>Protocol and checkpoints</summary><pre>{settings}</pre></details></main></html>"""
 
 
-def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="openml", max_dataset_rows=0, max_features=0):
+def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="openml", max_dataset_rows=0, max_features=0,
+         report_builder=report_html):
     parser = argparse.ArgumentParser(description=f"Evaluate penalty regimes on {benchmark} with a small-context protocol.")
     parser.add_argument("--lambdas", nargs="+", default=list(LAMBDAS),
                         help="Penalty values in checkpoint order; first must be 0 (baseline)")
@@ -203,7 +204,7 @@ def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="open
             print(f"Task {task_id}: {result['status']}{reason}", file=sys.stderr, flush=True)
     path = Path(args.html)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(report_html(payload, args.metric), encoding="utf-8")
+    path.write_text(report_builder(payload, args.metric), encoding="utf-8")
     print(f"Table saved to {path.resolve()}")
 
 
