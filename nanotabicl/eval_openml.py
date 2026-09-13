@@ -202,10 +202,13 @@ def main(argv=None, *, benchmark="OpenML-CC18", suite_id=99, output_prefix="open
             output.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n")
             reason = f" — {result['reason']}" if "reason" in result else ""
             print(f"Task {task_id}: {result['status']}{reason}", file=sys.stderr, flush=True)
+    if report_builder is None:
+        return payload
     path = Path(args.html)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(report_builder(payload, args.metric), encoding="utf-8")
     print(f"Table saved to {path.resolve()}")
+    return payload
 
 
 if __name__ == "__main__":

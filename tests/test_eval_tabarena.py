@@ -7,14 +7,22 @@ from nanotabicl.eval_openml import evaluate_task, report_html
 from nanotabicl import eval_tabarena
 
 
-def test_tabarena_defaults(monkeypatch):
+def test_tabarena_defaults(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(eval_tabarena, "run_benchmark", lambda *args, **kwargs: calls.append((args, kwargs)))
-    eval_tabarena.main(["--device", "cpu"])
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"settings": {}}
+    monkeypatch.setattr(eval_tabarena, "run_benchmark", run)
+    monkeypatch.setattr(eval_tabarena, "read_tabicl", lambda path: {})
+    monkeypatch.setattr(eval_tabarena, "seeded_report", lambda *args: "report")
+    monkeypatch.setattr(eval_tabarena.Path, "is_file", lambda path: True)
+    eval_tabarena.main(["--device", "cpu", "--output-dir", str(tmp_path), "--html", str(tmp_path / "report.html")])
     args, settings = calls[0]
-    assert args == (["--device", "cpu"],)
+    assert args[0][:2] == ["--device", "cpu"]
+    assert len(calls) == 3
+    assert "runs/cosine3000_fg0.5_seed3/latest.pt" in calls[2][0][0]
     assert settings["suite_id"] == 457
-    assert settings["max_dataset_rows"] == 10000 and settings["max_features"] == 100
+    assert settings["max_dataset_rows"] == 100000 and settings["max_features"] == 20
 
 
 class TaskType(Enum):
@@ -60,3 +68,20 @@ def test_relative_tables():
     assert "-20.00%" in html and "-50.00%" in html
     assert "Mean improvement (1 datasets)" in html and "<td>N/A</td>" in html
     assert "λ = 2.0" in html
+
+
+def test_seeded_statistics():
+    payloads = []
+    for seed, acc in enumerate([0.4, 0.5, 0.6]):
+        payloads.append({"model_keys": ["0", "0.5"], "settings": {"seed": 0, "training_seed": seed},
+                         "tasks": {"1": {"name": "data", "status": "ok", "folds": [],
+                         "scores": {"0": {"accuracy": acc, "log_loss": 2.0},
+                                    "0.5": {"accuracy": acc * 1.1, "log_loss": 1.0}}}}})
+    html = eval_tabarena.seeded_report(payloads, {"1": {"name": "data", "accuracy": 0.8, "log_loss": 0.5}})
+    assert "0.5000 ± 0.1000" in html
+    assert "+10.00 ± 0.00%" in html and "+50.00 ± 0.00%" in html
+    assert "0.8000 (SD N/A)" in html
+    assert html.count("<table>") == 2
+    payloads[1]["settings"]["seed"] = 1
+    with pytest.raises(ValueError, match="identical"):
+        eval_tabarena.seeded_report(payloads, {})
