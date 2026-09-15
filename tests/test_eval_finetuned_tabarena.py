@@ -100,3 +100,14 @@ def test_training_context_defaults_and_explicit_override():
         evaluation.resolve_contexts([metadata[0], {}], None)
     with pytest.raises(ValueError, match="positive"):
         evaluation.resolve_contexts(metadata, [-1])
+
+
+def test_summary_cli_ascii_and_html_without_evaluation(tmp_path, capsys):
+    path = tmp_path / "scores.json"
+    evaluation.save_json(path, payload())
+    assert evaluation.main(["--summary", str(path)]) == 0
+    assert "| Mean gain" in capsys.readouterr().out
+    html = tmp_path / "report.html"
+    assert evaluation.main(["--summary", str(path), "--html", str(html), "--per-dataset"]) == 0
+    assert "secret&lt;dataset&gt;" in html.read_text()
+    assert "| Mean gain" not in capsys.readouterr().out

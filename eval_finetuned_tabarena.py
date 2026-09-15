@@ -240,7 +240,11 @@ def main(argv=None):
                 sizes = resolve_contexts(metadata, args.context_sizes)
             except ValueError as error:
                 parser.error(str(error))
-            settings = {**reference["settings"], "context_sizes": sizes, "device": args.device}
+            settings = {key: reference["settings"][key] for key in (
+                "suite", "max_dataset_rows", "max_features", "context_size", "folds",
+                "seed", "max_test_rows", "query_batch_size", "n_estimators")}
+            settings.update(context_sizes=sizes, device=args.device,
+                            softmax_temperature=1., use_amp=False, use_fa3=False)
             # Keep inference settings identical to the existing full-model reference evaluator.
             def factory(path):
                 return lambda: TabICLClassifier(model_path=str(path), allow_auto_download=False,
