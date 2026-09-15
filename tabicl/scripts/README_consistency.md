@@ -5,11 +5,13 @@ for full TabICLv2 (PyTorch >=2.2):
 
 ```bash
 python -m pip install -e .
-python -m tabicl.train.finetune_consistency --steps 1000 --devices cuda:0 cuda:1 --output runs/fg_broad
+python -m tabicl.train.finetune_consistency --steps 1000 --devices cuda:0 --output runs/fg_broad
 ```
 
 `1000` is an example budget, not a selected optimum. `--steps` is required for a new run.
-After shared data preparation, both arms run **in parallel**, one process per GPU.
+After shared data preparation, both arms run **in parallel**. One device argument
+runs both processes on that device; two arguments assign one device per arm.
+Sharing one GPU requires memory for both full models and may be slower or exhaust VRAM.
 Use a new output directory per experiment. Normal runs print nothing to stdout;
 metrics, data progress, warnings and errors go to **one log file**, described below.
 The official `tabicl-classifier-v2-20260212.ckpt` downloads automatically; use
@@ -83,7 +85,8 @@ python -m tabicl.train.finetune_consistency --resume --output runs/fg_broad
 Settings are restored from the manifest; no need to repeat them. Each arm restores
 its own optimizer, weights and update count, and continues the original cosine
 schedule on the saved data. Completed arms are skipped. The original checkpoint
-download is not needed again. To move GPUs, add `--devices cuda:2 cuda:3`.
+download is not needed again. To resume on one GPU, add `--devices cuda:2`; to
+use two GPUs, add `--devices cuda:2 cuda:3`.
 The existing single log is appended, with explicit resume events. Updates replayed
 after a crash may appear twice in the log; use the most recent entry for that arm/step.
 

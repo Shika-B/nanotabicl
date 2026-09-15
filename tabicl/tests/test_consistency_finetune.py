@@ -165,4 +165,4 @@ def test_broader_defaults():
     args = argument_parser().parse_args([])
     assert args.context_rows == [128, 512, 2048, 8192]
     assert args.max_features == 100 and args.max_classes == 10 and args.tables_per_step == 16
-    assert args.devices == ["cuda:0", "cuda:1"]
+    assert args.devices == ["cuda:0"]

@@ -1,6 +1,6 @@
 """Paired full-model fine-tuning on a replayed two-target graph prior.
 
-python -m tabicl.train.finetune_consistency --steps 1000 --devices cuda:0 cuda:1
+python -m tabicl.train.finetune_consistency --steps 1000 --devices cuda:0
 
 Both arms use exactly the same checkpoint, tables, four-view supervision,
 enumerated forward calls, optimizer, and schedule. Only lambda_fg differs.
@@ -374,7 +374,8 @@ def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--steps", type=int, help="Required for a new run; fixed for both arms and on resume")
     parser.add_argument("--checkpoint", help="Local pretrained classifier; default downloads pinned official v2")
-    parser.add_argument("--devices", nargs=2, default=["cuda:0", "cuda:1"], help="Devices for lambda=0 and 0.5")
+    parser.add_argument("--devices", nargs="+", default=["cuda:0"],
+                        help="One shared device, or separate devices for lambda=0 and 0.5")
     parser.add_argument("--output", default="runs/consistency_finetune")
     parser.add_argument("--log-dir", default=str(PROJECT_ROOT / "logs"))
     parser.add_argument("--resume", action="store_true", help="Restore saved settings and each arm's last complete update")
@@ -416,12 +417,14 @@ def validate_args(args):
     if not all(math.isfinite(v) for v in [args.lr, args.end_lr, args.weight_decay, args.clip_grad]) or not (
             0 < args.end_lr <= args.lr and args.weight_decay >= 0 and args.clip_grad > 0):
         raise ValueError("Require 0 < end_lr <= lr, nonnegative weight decay and positive clip_grad")
+    if len(args.devices) not in (1, 2):
+        raise ValueError("--devices accepts one shared device or two arm-specific devices")
+    if len(args.devices) == 1:
+        args.devices *= 2
     devices = [torch.device(d) for d in args.devices]
     if any(d.type not in ("cpu", "cuda") for d in devices):
-        raise ValueError("Use two CUDA devices (or cpu cpu for tests)")
+        raise ValueError("Use CPU or CUDA devices")
     cuda_indices = [d.index if d.index is not None else 0 for d in devices if d.type == "cuda"]
-    if len(set(cuda_indices)) != len(cuda_indices):
-        raise ValueError("Parallel CUDA arms require two distinct GPUs")
     if cuda_indices and (not torch.cuda.is_available() or max(cuda_indices) >= torch.cuda.device_count()):
         raise ValueError("Requested CUDA devices are unavailable")
 
