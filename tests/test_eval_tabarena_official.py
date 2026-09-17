@@ -43,12 +43,23 @@ def test_official_runner_uses_lite_classification_and_three_named_models(tmp_pat
             return [SimpleNamespace(name=model[0].kwargs["model_cls"].ag_name) for model in state["bundle"]["models"]]
 
     class FakeContext:
+        task_metadata_collection = object()
+
         def build_and_run_jobs(self, experiments, **kwargs):
             state["run"] = kwargs
+
+        def register(self, methods):
+            state["registered"] = methods
 
         def compare(self, **kwargs):
             state["compare"] = kwargs
             return [1, 2, 3]
+
+    class FakeEndToEnd:
+        @staticmethod
+        def from_path_raw(path, **kwargs):
+            state.setdefault("processed", []).append(kwargs)
+            return SimpleNamespace(to_method_metadata_lst=lambda **_: [kwargs["method"]])
 
     models = ModuleType("official_tabarena_models")
     models.MODEL_CLASSES = tuple(type(f"Model{i}", (), {"ag_name": f"variant{i}"}) for i in range(3))
@@ -58,8 +69,11 @@ def test_official_runner_uses_lite_classification_and_three_named_models(tmp_pat
     config.ConfigGenerator = FakeGenerator
     contexts = ModuleType("tabarena.contexts")
     contexts.TabArenaContext = FakeContext
+    end_to_end = ModuleType("tabarena.end_to_end")
+    end_to_end.EndToEnd = FakeEndToEnd
     for name, module in {"official_tabarena_models": models, "tabarena.benchmark.experiment": benchmark,
-                         "tabarena.utils.config_utils": config, "tabarena.contexts": contexts}.items():
+                         "tabarena.utils.config_utils": config, "tabarena.contexts": contexts,
+                         "tabarena.end_to_end": end_to_end}.items():
         monkeypatch.setitem(sys.modules, name, module)
     checkpoints = [{"path": str(tmp_path / name)} for name in official.LABELS]
     experiments = official.build_experiments(checkpoints)
@@ -67,10 +81,21 @@ def test_official_runner_uses_lite_classification_and_three_named_models(tmp_pat
     assert state["bundle"]["default_seed_config"] == "static"
     assert all(count == 0 for _, count in state["bundle"]["models"])
     assert state["resources"] == {"num_gpus": 1}
+    for experiment in experiments:
+        for task in range(38):
+            path = tmp_path / "experiments" / "data" / experiment.name / str(task) / "0_0" / "results.pkl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
     official.run_official(experiments, output=tmp_path)
     assert state["run"]["subset"] == "lite"
     assert state["run"]["build_kwargs"] == {"problem_types": ["binary", "multiclass"]}
+    assert state["run"]["register"] is False
+    assert len(state["registered"]) == 3
+    assert len({item["model_key"] for item in state["processed"]}) == 3
     assert state["compare"]["subset"] == ["lite", "classification"]
     assert state["compare"]["new_methods_only"] is True
+    state.pop("run")
+    official.run_official(experiments, output=tmp_path, report_only=True)
+    assert "run" not in state
     official.run_official(experiments, output=tmp_path, full=True)
     assert state["run"]["subset"] is None

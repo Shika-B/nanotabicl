@@ -65,19 +65,39 @@ def build_experiments(checkpoints, *, num_gpus=1):
     return experiments
 
 
-def run_official(experiments, *, output, full=False):
+def run_official(experiments, *, output, full=False, report_only=False):
     from tabarena.contexts import TabArenaContext
+    from tabarena.end_to_end import EndToEnd
 
     context = TabArenaContext()
     scope = None if full else "lite"
-    context.build_and_run_jobs(
-        experiments,
-        expname=str(output / "experiments"),
-        subset=scope,
-        build_kwargs={"problem_types": ["binary", "multiclass"]},
-        new_result_prefix="[FG] ",
-        debug_mode=True,  # sequential, in-process execution on one GPU
-    )
+    raw_root = output / "experiments"
+    if not report_only:
+        context.build_and_run_jobs(
+            experiments,
+            expname=str(raw_root),
+            subset=scope,
+            build_kwargs={"problem_types": ["binary", "multiclass"]},
+            register=False,
+            debug_mode=True,  # sequential, in-process execution on one GPU
+        )
+    raw_paths = sorted(raw_root.rglob("results.pkl"))
+    methods = []
+    for label, experiment in zip(LABELS, experiments):
+        paths = [path for path in raw_paths if path.parts[-4] == experiment.name]
+        if not paths or (not full and len(paths) != 38):
+            raise RuntimeError(f"{label}: found {len(paths)} completed jobs; expected "
+                               f"{'all classification splits' if full else '38 Lite tasks'}")
+        # The adapter's ag_key stays TA-TABICLv2 for official task constraints,
+        # but each checkpoint must have a distinct result-family key.
+        family = f"FG-TabICLv2-{label}"
+        results = EndToEnd.from_path_raw(
+            raw_root, file_paths=paths, task_metadata=context.task_metadata_collection,
+            model_key=family, method=family, display_name=family,
+            cache=False, backend="native", verbose=False,
+        )
+        methods.extend(results.to_method_metadata_lst(new_result_prefix="[FG] "))
+    context.register(methods)
     leaderboard = context.compare(output_dir=output / "comparison",
                                   subset=["classification"] if full else ["lite", "classification"],
                                   new_methods_only=True, plot=False)
@@ -95,6 +115,8 @@ def main(argv=None):
     parser.add_argument("--step", type=int, default=2000, help="Expected fine-tuning step in both checkpoints")
     parser.add_argument("--output", type=Path, default=ROOT / "runs/tabarena_official_fg2000")
     parser.add_argument("--full", action="store_true", help="Run every split; default is first split per dataset")
+    parser.add_argument("--report-only", action="store_true",
+                        help="Rebuild the comparison from saved results without fitting models")
     args = parser.parse_args(argv)
     try:
         checkpoints = [checkpoint_info(path, label, args.step) for path, label in
@@ -115,7 +137,8 @@ def main(argv=None):
     if manifest_path.exists() and json.loads(manifest_path.read_text()) != manifest:
         parser.error(f"Output contains a different experiment: {args.output}")
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
-    leaderboard = run_official(experiments, output=args.output, full=args.full)
+    leaderboard = run_official(experiments, output=args.output, full=args.full,
+                               report_only=args.report_only)
     print(leaderboard.to_string(index=False))
     print(f"\nTabArena results: {args.output / 'comparison'}")
     return 0
